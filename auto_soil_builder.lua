@@ -1,7 +1,7 @@
 ---@diagnostic disable: undefined-global, lowercase-global
 -- ============================================================================
 -- AUTO SOIL & BLOCK BUILDER BY BOREN STORE - GROWLAUNCHER
--- Sesuai Layout Gambar 1 (Soil Rows & Water Elevator) & Gambar 2 (Lock Setup)
+-- Sistem Pembuatan Farm Terpadu (Baris Block & Elevator Air) serta Proteksi Kunci Lengkap
 -- Fitur: Auto Blast World, Multi-Storage Restock, Multi-World Farm Management,
 --        Water Column, Persistent File Backup di Folder Download HP / PC
 -- ============================================================================
@@ -101,24 +101,24 @@ local CFG = {
     auto_use_blast          = (loadPref("auto_use_blast", false) == true),
     blast_item_id           = tonumber(loadPref("blast_item_id", 1336)) or 1336, -- 1336 = World Blast, 2810 = Cave Blast
     
-    -- Lock Enclosure Settings (Sesuai Gambar 2)
+    -- Pengaturan Proteksi Kunci Pintu
     enable_lock_enclosure   = (loadPref("enable_lock_enclosure", true) == true),
-    lock_id_wl              = tonumber(loadPref("lock_id_wl", 242)) or 242,       -- World Lock (Bawah Kiri)
-    lock_id_sl              = tonumber(loadPref("lock_id_sl", 202)) or 202,       -- Small Lock (Atas Tengah)
-    lock_id_jammer          = tonumber(loadPref("lock_id_jammer", 226)) or 226,   -- Signal Jammer (Bawah Tengah)
-    lock_id_blocker         = tonumber(loadPref("lock_id_blocker", 828)) or 828,  -- Blocker Door (Atas White Door, misal Air Vent)
-    lock_id_door            = tonumber(loadPref("lock_id_door", 12)) or 12,       -- Wooden Door (Atas Kiri)
+    lock_id_wl              = tonumber(loadPref("lock_id_wl", 242)) or 242,       -- World Lock
+    lock_id_sl              = tonumber(loadPref("lock_id_sl", 202)) or 202,       -- Small Lock
+    lock_id_jammer          = tonumber(loadPref("lock_id_jammer", 226)) or 226,   -- Signal Jammer
+    lock_id_blocker         = tonumber(loadPref("lock_id_blocker", 828)) or 828,  -- Blocker Door (Air Vent)
+    lock_id_door            = tonumber(loadPref("lock_id_door", 12)) or 12,       -- Wooden Door
     farm_door_id            = tostring(loadPref("farm_door_id", "BOREN")),        -- Label / ID Door
     wl_make_public          = (loadPref("wl_make_public", false) == true),
     
-    -- Water Column Elevator (Sesuai Gambar 1)
+    -- Pengaturan Elevator Air Vertikal
     enable_water_column     = (loadPref("enable_water_column", true) == true),
     water_item_id           = tonumber(loadPref("water_item_id", 822)) or 822,    -- 822 = Water
     water_x                 = tonumber(loadPref("water_x", 0)) or 0,              -- Kolom elevator X = 0
     water_start_y           = tonumber(loadPref("water_start_y", 1)) or 1,
     water_end_y             = tonumber(loadPref("water_end_y", 54)) or 54,
     
-    -- Block / Soil Placement Layout (Sesuai Gambar 1)
+    -- Pengaturan Tata Letak Baris Block
     block_id                = tonumber(loadPref("block_id", 8772)) or 8772,       -- Default 8772 = Soil Block
     row_step                = tonumber(loadPref("row_step", 2)) or 2,             -- Tiap 2 baris (Y genap: 2, 4, 6... 54)
     row_start_y             = tonumber(loadPref("row_start_y", 2)) or 2,
@@ -309,6 +309,48 @@ local function getItemNameSafe(itemID)
     end
 
     return "Item #" .. tostring(itemID)
+end
+
+local function getWorldNameSafe()
+    local fn = getCurrentWorldName or GetCurrentWorldName
+    if fn then
+        local ok, n = pcall(fn)
+        if ok and type(n) == "string" and n ~= "" and n:upper() ~= "EXIT" then
+            return n:upper()
+        end
+    end
+    local wFn = getWorld or GetWorld
+    if wFn then
+        local ok, w = pcall(wFn)
+        if ok and w then
+            if type(w) == "string" and w ~= "" and w:upper() ~= "EXIT" then
+                return w:upper()
+            elseif type(w) == "table" and w.name and type(w.name) == "string" and w.name ~= "" and w.name:upper() ~= "EXIT" then
+                return w.name:upper()
+            end
+        end
+    end
+    if getBot then
+        local ok, b = pcall(getBot)
+        if ok and b then
+            if b.getWorld then
+                local ok2, w = pcall(b.getWorld, b)
+                if ok2 and w and type(w.name) == "string" and w.name ~= "" and w.name:upper() ~= "EXIT" then
+                    return w.name:upper()
+                end
+            end
+            if b.world and type(b.world) == "string" and b.world ~= "" and b.world:upper() ~= "EXIT" then
+                return b.world:upper()
+            end
+        end
+    end
+    if getLocal then
+        local ok, p = pcall(getLocal)
+        if ok and p and p.world and type(p.world) == "string" and p.world ~= "" and p.world:upper() ~= "EXIT" then
+            return p.world:upper()
+        end
+    end
+    return ""
 end
 
 -- ============================================================================
@@ -866,15 +908,114 @@ local function placeTileAt(tx, ty, itemID)
 end
 
 -- ============================================================================
--- 9. LOCK ENCLOSURE ENGINE (SESUAI GAMBAR 2)
+-- 9. LOCK & ACCESS PROTECTION ENGINE
 -- ============================================================================
+local function getMissingLockMaterials()
+    local missing = {}
+    local needed = {
+        { id = CFG.lock_id_wl, name = "World Lock", count = 1 },
+        { id = CFG.lock_id_sl, name = "Small Lock", count = 1 },
+        { id = CFG.lock_id_jammer, name = "Signal Jammer", count = 1 },
+        { id = CFG.lock_id_blocker, name = "Blocker Door", count = 1 },
+        { id = CFG.lock_id_door, name = "Wooden Door", count = 1 },
+    }
+    for _, item in ipairs(needed) do
+        local inInv = getInvCount(item.id)
+        if inInv < item.count then
+            table.insert(missing, { id = item.id, name = item.name, need = item.count - inInv })
+        end
+    end
+    return missing
+end
+
+local function restockLockMaterialsFromStorage(missing)
+    if #CFG.storage_list == 0 then
+        local names = {}
+        for _, m in ipairs(missing) do
+            table.insert(names, string.format("%s (ID %d)", m.name, m.id))
+        end
+        local warnStr = "Bahan proteksi tidak ada di tas & daftar gudang kosong: " .. table.concat(names, ", ")
+        addLog("`4[Peringatan Bahan] `o" .. warnStr)
+        notifyUser(warnStr)
+        return false
+    end
+
+    local currentFarm = STATE.current_world
+    local currentFarmDoor = STATE.current_door
+    addLog("`9[Proteksi Gudang] `0Bahan proteksi kurang di tas. Mencari ke gudang...")
+
+    for _, stor in ipairs(CFG.storage_list) do
+        if not STATE.running or STATE.paused then break end
+        if stor.name and stor.name ~= "" then
+            addLog(string.format("`9[Cek Gudang] `0Mengecek bahan proteksi di %s...", stor.name))
+            if warpToWorld(stor.name, stor.door) then
+                safeSleep(1500)
+                local objs = nil
+                if getObjects then
+                    local okO, resO = pcall(getObjects)
+                    if okO and resO then objs = resO end
+                elseif getBot and getBot().getWorld then
+                    local w = getBot():getWorld()
+                    if w and w.getObjects then objs = w:getObjects() end
+                end
+
+                if objs then
+                    for _, m in ipairs(missing) do
+                        if getInvCount(m.id) < m.need then
+                            for _, obj in pairs(objs) do
+                                local oId = obj.id or obj.item or 0
+                                if oId == m.id then
+                                    local ox = math.floor((obj.posX or obj.x or 0) / 32)
+                                    local oy = math.floor((obj.posY or obj.y or 0) / 32)
+                                    moveSafeTo(ox, oy)
+                                    safeSleep(400)
+                                    if collect then pcall(collect, 2, 5) end
+                                    safeSleep(500)
+                                    if getInvCount(m.id) >= m.need then
+                                        break
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    -- Kembali ke farm world
+    if currentFarm ~= "" then
+        warpToWorld(currentFarm, currentFarmDoor)
+        safeSleep(1200)
+    end
+
+    -- Evaluasi apakah semua bahan sudah lengkap
+    local stillMissing = getMissingLockMaterials()
+    if #stillMissing > 0 then
+        local names = {}
+        for _, m in ipairs(stillMissing) do
+            table.insert(names, string.format("%s (ID %d)", m.name, m.id))
+        end
+        local warnStr = "Bahan proteksi tidak lengkap di tas/gudang: " .. table.concat(names, ", ")
+        addLog("`4[Peringatan Bahan] `o" .. warnStr)
+        notifyUser(warnStr)
+        return false
+    end
+
+    addLog("`2[Proteksi Gudang] `wSeluruh bahan proteksi berhasil diambil dari gudang!")
+    return true
+end
+
 local function buildLockEnclosure()
+    -- 1. Validasi opsi apakah user mengaktifkan proteksi lock
     if not CFG.enable_lock_enclosure then
-        addLog("`e[Enclosure] `0Pengaman lock dilewati (dinonaktifkan oleh user).")
+        addLog("`e[Proteksi Kunci] `0Fitur proteksi kunci dinonaktifkan oleh user.")
         return true
     end
 
-    addLog("`9[Enclosure] `0Mendeteksi White Door dan membangun pengaman (Gambar 2)...")
+    addLog("`9[Proteksi Kunci] `0Memeriksa posisi White Door dan ketersediaan bahan...")
+
+    -- 2. Cek posisi White Door
     local doorX, doorY = nil, nil
     for y = 0, 59 do
         for x = 0, 99 do
@@ -888,113 +1029,135 @@ local function buildLockEnclosure()
     end
 
     if not doorX or not doorY then
-        addLog("`4[Enclosure Gagal] `oWhite Door tidak ditemukan di world ini!")
+        addLog("`4[Proteksi Gagal] `oWhite Door tidak ditemukan di world ini!")
+        notifyUser("Peringatan: White Door tidak ditemukan!")
         return false
     end
-    addLog(string.format("`2[Enclosure] `wWhite Door terdeteksi di (%d, %d)", doorX, doorY))
+    addLog(string.format("`2[Proteksi] `wWhite Door terdeteksi di koordinat (%d, %d)", doorX, doorY))
 
-    -- 1. Bersihkan petak di sekitar White Door
-    local spotsToClear = {
-        { doorX, doorY - 1 },
-        { doorX - 1, doorY },
-        { doorX - 1, doorY - 1 },
-        { doorX - 2, doorY },
-        { doorX - 2, doorY - 1 }
-    }
-    for _, sp in ipairs(spotsToClear) do
-        local sx, sy = sp[1], sp[2]
-        local ok, t = pcall(getTile, sx, sy)
-        if ok and t and (t.fg ~= 0 and t.fg ~= 8 and t.fg ~= 6) then
-            breakTileAt(sx, sy)
+    -- Tentukan orientasi horizontal (kiri pintu jika doorX >= 2, kanan jika < 2)
+    local dirX = (doorX >= 2) and -1 or 1
+    local pJammer  = { x = doorX + (1 * dirX), y = doorY }
+    local pBlocker = { x = doorX,              y = doorY - 1 }
+    local pSL      = { x = doorX + (1 * dirX), y = doorY - 1 }
+    local pDoor    = { x = doorX + (2 * dirX), y = doorY - 1 }
+    local pWL      = { x = doorX + (2 * dirX), y = doorY }
+
+    -- 3. Cek apakah formasi kunci sudah pernah terpasang lengkap
+    local okWl, tWl = pcall(getTile, pWL.x, pWL.y)
+    local okSl, tSl = pcall(getTile, pSL.x, pSL.y)
+    if okWl and tWl and tWl.fg == CFG.lock_id_wl and okSl and tSl and tSl.fg == CFG.lock_id_sl then
+        addLog("`2[Proteksi Kunci] `wStruktur proteksi kunci sudah terpasang rapi!")
+        return true
+    end
+
+    -- 4. Validasi ketersediaan bahan yang diperlukan
+    local missingMat = getMissingLockMaterials()
+    if #missingMat > 0 then
+        addLog("`e[Bahan Kurang] `0Bahan proteksi belum lengkap di tas. Mencoba mengambil ke gudang...")
+        local okRestock = restockLockMaterialsFromStorage(missingMat)
+        if not okRestock then
+            addLog("`4[Peringatan Proteksi] `oPemasangan kunci dilewati karena bahan tidak tersedia.")
+            notifyUser("Pemasangan kunci dilewati: bahan tidak lengkap.")
+            return false
         end
     end
 
-    -- 2. Pasang Signal Jammer di (doorX - 1, doorY)
-    addLog("`9[Enclosure] `0Memasang Signal Jammer...")
-    if not placeTileAt(doorX - 1, doorY, CFG.lock_id_jammer) then
-        addLog("`e[Enclosure] `0Peringatan: Gagal menaruh Signal Jammer.")
+    -- 5. Bersihkan area petak formasi proteksi
+    local spotsToClear = { pBlocker, pJammer, pSL, pDoor, pWL }
+    for _, sp in ipairs(spotsToClear) do
+        local ok, t = pcall(getTile, sp.x, sp.y)
+        if ok and t and (t.fg ~= 0 and t.fg ~= 8 and t.fg ~= 6) then
+            breakTileAt(sp.x, sp.y)
+        end
     end
 
-    -- 3. Pasang Blocker / Air Vent di (doorX, doorY - 1)
-    addLog("`9[Enclosure] `0Memasang Blocker Door / Air Vent...")
-    if not placeTileAt(doorX, doorY - 1, CFG.lock_id_blocker) then
-        addLog("`e[Enclosure] `0Peringatan: Gagal menaruh Blocker Door.")
+    -- 6. Pasang Signal Jammer
+    addLog("`9[Proteksi] `0Memasang Signal Jammer...")
+    if not placeTileAt(pJammer.x, pJammer.y, CFG.lock_id_jammer) then
+        addLog("`e[Proteksi] `0Peringatan: Gagal menaruh Signal Jammer.")
     end
 
-    -- 4. Pasang Small Lock di (doorX - 1, doorY - 1)
-    addLog("`9[Enclosure] `0Memasang Small Lock...")
-    if placeTileAt(doorX - 1, doorY - 1, CFG.lock_id_sl) then
+    -- 7. Pasang Blocker Door / Air Vent
+    addLog("`9[Proteksi] `0Memasang Blocker Door...")
+    if not placeTileAt(pBlocker.x, pBlocker.y, CFG.lock_id_blocker) then
+        addLog("`e[Proteksi] `0Peringatan: Gagal menaruh Blocker Door.")
+    end
+
+    -- 8. Pasang Small Lock & Recalc Lock
+    addLog("`9[Proteksi] `0Memasang Small Lock...")
+    if placeTileAt(pSL.x, pSL.y, CFG.lock_id_sl) then
         safeSleep(300)
-        wrenchTile(doorX - 1, doorY - 1)
+        wrenchTile(pSL.x, pSL.y)
         safeSleep(300)
         if sendPacket then
-            pcall(sendPacket, 2, string.format("action|dialog_return\ndialog_name|lock_edit\ntilex|%d|\ntiley|%d|\nbuttonClicked|recalcLock\n\ncheckbox_public|0\ncheckbox_ignore|1", doorX - 1, doorY - 1))
+            pcall(sendPacket, 2, string.format("action|dialog_return\ndialog_name|lock_edit\ntilex|%d|\ntiley|%d|\nbuttonClicked|recalcLock\n\ncheckbox_public|0\ncheckbox_ignore|1", pSL.x, pSL.y))
         end
         safeSleep(300)
     end
 
-    -- 5. Pasang Wooden Door di (doorX - 2, doorY - 1) & setting Door ID
-    addLog("`9[Enclosure] `0Memasang Wooden Door...")
-    if placeTileAt(doorX - 2, doorY - 1, CFG.lock_id_door) then
+    -- 9. Pasang Wooden Door & Setting Door ID
+    addLog("`9[Proteksi] `0Memasang Wooden Door...")
+    if placeTileAt(pDoor.x, pDoor.y, CFG.lock_id_door) then
         safeSleep(300)
-        wrenchTile(doorX - 2, doorY - 1)
+        wrenchTile(pDoor.x, pDoor.y)
         safeSleep(300)
         local dID = (CFG.farm_door_id and CFG.farm_door_id ~= "") and CFG.farm_door_id or "BOREN"
         if sendPacket then
-            pcall(sendPacket, 2, string.format("action|dialog_return\ndialog_name|door_edit\ntilex|%d|\ntiley|%d|\ndoor_name|\ndoor_target|\ndoor_id|%s\ncheckbox_locked|1", doorX - 2, doorY - 1, dID))
+            pcall(sendPacket, 2, string.format("action|dialog_return\ndialog_name|door_edit\ntilex|%d|\ntiley|%d|\ndoor_name|\ndoor_target|\ndoor_id|%s\ncheckbox_locked|1", pDoor.x, pDoor.y, dID))
         end
         safeSleep(300)
     end
 
-    -- 6. Pasang World Lock di (doorX - 2, doorY)
-    addLog("`9[Enclosure] `0Memasang World Lock...")
-    if placeTileAt(doorX - 2, doorY, CFG.lock_id_wl) then
+    -- 10. Pasang World Lock
+    addLog("`9[Proteksi] `0Memasang World Lock...")
+    if placeTileAt(pWL.x, pWL.y, CFG.lock_id_wl) then
         safeSleep(300)
         if CFG.wl_make_public then
-            wrenchTile(doorX - 2, doorY)
+            wrenchTile(pWL.x, pWL.y)
             safeSleep(300)
             if sendPacket then
-                pcall(sendPacket, 2, string.format("action|dialog_return\ndialog_name|lock_edit\ntilex|%d|\ntiley|%d|\ncheckbox_public|1\ncheckbox_disable_music|0\ntempo|100\ncheckbox_disable_music_render|0\ncheckbox_set_as_home_world|0\nminimum_entry_level|1", doorX - 2, doorY))
+                pcall(sendPacket, 2, string.format("action|dialog_return\ndialog_name|lock_edit\ntilex|%d|\ntiley|%d|\ncheckbox_public|1\ncheckbox_disable_music|0\ntempo|100\ncheckbox_disable_music_render|0\ncheckbox_set_as_home_world|0\nminimum_entry_level|1", pWL.x, pWL.y))
             end
             safeSleep(300)
         end
     end
 
-    addLog("`2[Enclosure Selesai] `wStruktur pengaman Gambar 2 berhasil dipasang!")
+    addLog("`2[Proteksi Selesai] `wStruktur proteksi kunci berhasil dipasang secara optimal!")
     return true
 end
 
 -- ============================================================================
--- 10. WATER COLUMN ELEVATOR ENGINE (SESUAI GAMBAR 1)
+-- 10. VERTICAL WATER ELEVATOR ENGINE
 -- ============================================================================
 local function buildWaterColumn()
     if not CFG.enable_water_column then
-        addLog("`e[Water Elevator] `0Kolom water dilewati (dinonaktifkan oleh user).")
+        addLog("`e[Elevator Air] `0Pemasangan kolom air dilewati (dinonaktifkan oleh user).")
         return true
     end
 
-    addLog(string.format("`9[Water Elevator] `0Memasang kolom air di X=%d (Y=%d s/d %d)...", CFG.water_x, CFG.water_start_y, CFG.water_end_y))
+    addLog(string.format("`9[Elevator Air] `0Memasang kolom air di X=%d (Y=%d s/d %d)...", CFG.water_x, CFG.water_start_y, CFG.water_end_y))
     local wx = CFG.water_x
     for wy = CFG.water_start_y, CFG.water_end_y do
         if not STATE.running or STATE.paused then break end
         local ok, t = pcall(getTile, wx, wy)
         if ok and t and t.fg ~= CFG.water_item_id and t.fg ~= 8 and t.fg ~= 6 then
             if getInvCount(CFG.water_item_id) <= 0 then
-                addLog("`e[Water Habis] `0Sisa item water habis di tas. Melanjutkan layout...")
+                addLog("`e[Item Air Habis] `0Item air habis di tas. Melanjutkan konstruksi baris...")
                 break
             end
             placeTileAt(wx, wy, CFG.water_item_id)
         end
     end
-    addLog("`2[Water Elevator] `wPemasangan kolom water selesai.")
+    addLog("`2[Elevator Air] `wPemasangan elevator air vertikal selesai.")
     return true
 end
 
 -- ============================================================================
--- 11. SOIL ROW PLACEMENT ENGINE (SESUAI GAMBAR 1)
+-- 11. HORIZONTAL ROW PLACEMENT ENGINE
 -- ============================================================================
 local function placeSoilRows(onNeedRestockCallback)
-    addLog(string.format("`9[Place Rows] `0Memulai penempatan baris block (ID: %d - %s)...", CFG.block_id, getItemNameSafe(CFG.block_id)))
+    addLog(string.format("`9[Konstruksi] `0Memulai penempatan baris block (ID: %d - %s)...", CFG.block_id, getItemNameSafe(CFG.block_id)))
     local rowIdx = 0
 
     applyCheatToggles()
@@ -1163,6 +1326,27 @@ local function executeWorldBlast()
     return true
 end
 
+local function recordBlastedWorld(worldName, doorID)
+    worldName = (worldName or ""):upper()
+    doorID = (doorID or "")
+    if worldName == "" or worldName == "EXIT" then return end
+    local exists = false
+    for _, w in ipairs(CFG.farm_world_list) do
+        if (w.name or ""):upper() == worldName then
+            exists = true
+            break
+        end
+    end
+    if not exists then
+        table.insert(CFG.farm_world_list, { name = worldName, door = doorID, done = false })
+        savePrefs(CFG)
+        saveWorldsToFile()
+        updateWorldDisplayList()
+        addLog(string.format("`2[World Blast Tersimpan] `wWorld %s otomatis masuk ke daftar antrean!", worldName))
+        notifyUser("World Blast tersimpan: " .. worldName)
+    end
+end
+
 -- ============================================================================
 -- 13. MULTI-STORAGE RESTOCK ENGINE
 -- ============================================================================
@@ -1255,7 +1439,10 @@ local function runSingleFarmWorld(worldName, doorID)
             addLog("`e[World Terkunci] `0World ini sudah ada pemiliknya. Melewati...")
             return false
         end
-        executeWorldBlast()
+        local okBlast = executeWorldBlast()
+        if okBlast then
+            recordBlastedWorld(worldName, doorID)
+        end
     end
 
     buildLockEnclosure()
@@ -1289,7 +1476,17 @@ local function autoSoilMainLoop()
             addLog(string.format("`9[Scan World] `0Memeriksa world acak: %s", rndWorld))
             if runSingleFarmWorld(rndWorld, CFG.farm_door_id) then
                 found = found + 1
-                table.insert(CFG.farm_world_list, { name = rndWorld, door = CFG.farm_door_id, done = true })
+                local foundEntry = false
+                for _, w in ipairs(CFG.farm_world_list) do
+                    if (w.name or ""):upper() == rndWorld:upper() then
+                        w.done = true
+                        foundEntry = true
+                        break
+                    end
+                end
+                if not foundEntry then
+                    table.insert(CFG.farm_world_list, { name = rndWorld, door = CFG.farm_door_id, done = true })
+                end
                 savePrefs(CFG)
                 saveWorldsToFile()
                 updateWorldDisplayList()
@@ -1959,116 +2156,122 @@ local function registerNativeSoilUI()
         return
     end
 
-    -- Tab 1: Start & World Farm
-    local uiWorld = createNativeUI("1. Start & World", "PlayArrow")
-    uiWorld:addLabelApp("Boren Soil - Auto Builder", "Grass")
-    uiWorld:addToggleButton("▶ START BOT (Mulai Pasang)", false, "as_run_power")
-    uiWorld:addButton("■ STOP BOT", "as_btn_stop")
-    uiWorld:addToggle("Pause Bot", false, "as_pause_toggle", false)
-    uiWorld:addDisplayList("Status Bot", "Default", "as_power_status_list")
+    -- Tab 1: Dashboard & World Farm
+    local uiWorld = createNativeUI("1. Dashboard & World", "PlayArrow")
+    uiWorld:addLabelApp("Boren Farm Builder", "Grass")
+    uiWorld:addToggleButton("▶ Mulai Bot", false, "as_run_power")
+    uiWorld:addButton("■ Hentikan Bot", "as_btn_stop")
+    uiWorld:addToggle("Jeda Bot", false, "as_pause_toggle", false)
+    uiWorld:addDisplayList("Status Operasi", "Default", "as_power_status_list")
     uiWorld:addDivider()
-    uiWorld:addLabel("Antrean Farm World:")
+    uiWorld:addLabel("Daftar Antrean World:")
     uiWorld:addInputString("Nama World", "", "World", "WORLD1", "Public", "as_input_add_world")
     uiWorld:addInputString("Door ID (Opsional)", "", "Door ID", "Kosong = White Door", "DoorFront", "as_input_add_door")
     uiWorld:addButton("➕ Tambah World ke Antrean", "as_btn_add_world")
-    uiWorld:addButton("📍 Pakai / Tambah World Sekarang ke Antrean", "as_btn_add_cur_world")
-    uiWorld:addButton("📋 Kelola / Edit, Salin & Tempel World", "as_btn_manage_worlds")
-    uiWorld:addButton("🗑️ Kosongkan Antrean World", "as_btn_clear_worlds")
+    uiWorld:addButton("📍 Tambah World Aktif", "as_btn_add_cur_world")
+    uiWorld:addButton("📋 Kelola Antrean World", "as_btn_manage_worlds")
+    uiWorld:addButton("🗑️ Kosongkan Antrean", "as_btn_clear_worlds")
     uiWorld:addDivider()
-    uiWorld:addLabel("Cadangan File (Folder Download HP):")
-    uiWorld:addButton("📥 Simpan Antrean ke Download", "as_btn_save_worlds")
-    uiWorld:addButton("📤 Muat Antrean dari Download", "as_btn_load_worlds")
-    uiWorld:addDisplayList("Daftar Farm World", "Default", "as_world_display_list")
+    uiWorld:addLabel("Penyimpanan File Cadangan (Download):")
+    uiWorld:addButton("📥 Simpan Antrean ke File", "as_btn_save_worlds")
+    uiWorld:addButton("📤 Muat Antrean dari File", "as_btn_load_worlds")
+    uiWorld:addDisplayList("Daftar Antrean World", "Default", "as_world_display_list")
     uiWorld:addDivider()
-    uiWorld:addLabel("Cari & Blast Otomatis (Opsional):")
-    uiWorld:addToggle("Mode Random World", CFG.world_mode == "RANDOM", "as_chk_mode_random", true)
-    uiWorld:addSlider("Panjang Huruf Random", 4, 12, CFG.random_letter_count, 1, false, "as_in_rnd_len")
-    uiWorld:addToggle("Sertakan Angka (0-9)", CFG.random_with_number, "as_chk_rnd_num", true)
-    uiWorld:addInputString("Prefix World", CFG.random_prefix, "Prefix", "Kosongkan jika acak", "Label", "as_in_rnd_prefix")
+    uiWorld:addLabel("Pencarian World Otomatis:")
+    uiWorld:addToggle("Mode Acak World", CFG.world_mode == "RANDOM", "as_chk_mode_random", true)
+    uiWorld:addSlider("Panjang Karakter", 4, 12, CFG.random_letter_count, 1, false, "as_in_rnd_len")
+    uiWorld:addToggle("Sertakan Angka", CFG.random_with_number, "as_chk_rnd_num", true)
+    uiWorld:addInputString("Awalan (Prefix)", CFG.random_prefix, "Prefix", "Kosongkan jika acak", "Label", "as_in_rnd_prefix")
     uiWorld:addInputInt("Target Jumlah World", tostring(CFG.random_target_count), "Target", "20", "FormatListNumbered", "as_in_rnd_target")
     uiWorld:addDivider()
-    uiWorld:addLabel("Auto Use Blast (Opsional):")
-    uiWorld:addToggle("Gunakan Blast di World Baru", CFG.auto_use_blast, "as_chk_auto_blast", true)
+    uiWorld:addLabel("Fitur World Blast:")
+    uiWorld:addToggle("Gunakan Blast Otomatis", CFG.auto_use_blast, "as_chk_auto_blast", true)
     uiWorld:addInputInt("ID Item Blast", tostring(CFG.blast_item_id), "Blast ID", "1336 (World) / 2810 (Cave)", "Tag", "as_in_blast_id")
 
-    -- Tab 2: Lock & Door (Sesuai Gambar 2)
-    local uiLock = createNativeUI("2. Lock & Door", "Lock")
-    uiLock:addLabelApp("Pengaman Pintu (Gambar 2)", "Lock")
-    uiLock:addTooltip("Posisi Lock", "White Door (kanan-bawah), Air Vent (kanan-atas), SL (tengah-atas), Jammer (tengah-bawah), Wooden Door (kiri-atas), WL (kiri-bawah).", "Verified", false)
-    uiLock:addToggle("Aktifkan Pengaman Lock", CFG.enable_lock_enclosure, "as_chk_enable_lock", true)
+    -- Tab 2: Proteksi & Kunci
+    local uiLock = createNativeUI("2. Proteksi & Kunci", "Lock")
+    uiLock:addLabelApp("Proteksi Akses Pintu", "Lock")
+    uiLock:addTooltip("Formasi Proteksi", "Formasi: White Door (kanan-bawah), Blocker Door (kanan-atas), Small Lock (tengah-atas), Signal Jammer (tengah-bawah), Wooden Door (kiri-atas), World Lock (kiri-bawah).", "Verified", false)
+    uiLock:addToggle("Aktifkan Proteksi Kunci", CFG.enable_lock_enclosure, "as_chk_enable_lock", true)
     uiLock:addDivider()
-    uiLock:addInputInt("ID World Lock (Kiri Bawah)", tostring(CFG.lock_id_wl), "ID WL", "242", "Lock", "as_in_id_wl")
-    uiLock:addToggle("World Lock Public", CFG.wl_make_public, "as_chk_wl_public", true)
+    uiLock:addInputInt("ID World Lock", tostring(CFG.lock_id_wl), "ID WL", "242", "Lock", "as_in_id_wl")
+    uiLock:addToggle("World Lock Publik", CFG.wl_make_public, "as_chk_wl_public", true)
     uiLock:addDivider()
-    uiLock:addInputInt("ID Small Lock (Tengah Atas)", tostring(CFG.lock_id_sl), "ID SL", "202", "Lock", "as_in_id_sl")
+    uiLock:addInputInt("ID Small Lock", tostring(CFG.lock_id_sl), "ID SL", "202", "Lock", "as_in_id_sl")
     uiLock:addDivider()
-    uiLock:addInputInt("ID Signal Jammer (Tengah Bawah)", tostring(CFG.lock_id_jammer), "ID Jammer", "226", "WifiTethering", "as_in_id_jammer")
+    uiLock:addInputInt("ID Signal Jammer", tostring(CFG.lock_id_jammer), "ID Jammer", "226", "WifiTethering", "as_in_id_jammer")
     uiLock:addDivider()
-    uiLock:addInputInt("ID Blocker Door (Atas White Door)", tostring(CFG.lock_id_blocker), "ID Blocker", "828 (Air Vent)", "DoorFront", "as_in_id_blocker")
+    uiLock:addInputInt("ID Blocker Door", tostring(CFG.lock_id_blocker), "ID Blocker", "828 (Air Vent)", "DoorFront", "as_in_id_blocker")
     uiLock:addDivider()
-    uiLock:addInputInt("ID Wooden Door (Kiri Atas)", tostring(CFG.lock_id_door), "ID Door", "12 (Wooden Door)", "DoorFront", "as_in_id_door")
-    uiLock:addInputString("Door ID Farm", CFG.farm_door_id, "Door ID", "BOREN", "Label", "as_in_door_label")
-    uiLock:addButton("💾 Simpan Pengaturan Lock", "as_btn_save_lock_cfg")
+    uiLock:addInputInt("ID Wooden Door", tostring(CFG.lock_id_door), "ID Door", "12 (Wooden Door)", "DoorFront", "as_in_id_door")
+    uiLock:addInputString("Label Door ID", CFG.farm_door_id, "Door ID", "BOREN", "Label", "as_in_door_label")
+    uiLock:addButton("💾 Simpan Konfigurasi Proteksi", "as_btn_save_lock_cfg")
 
-    -- Tab 3: Storage Gudang
-    local uiStorage = createNativeUI("3. Storage Gudang", "Inventory")
-    uiStorage:addLabelApp("Multi-Storage Gudang", "Inventory")
+    -- Tab 3: Gudang & Restock
+    local uiStorage = createNativeUI("3. Gudang & Restock", "Inventory")
+    uiStorage:addLabelApp("Manajemen Gudang Multi-Storage", "Inventory")
     uiStorage:addInputString("Nama Gudang", "", "World", "GUDANG1", "Inventory", "as_input_add_stor")
-    uiStorage:addInputString("Door Gudang", "", "Door ID", "DOOR123", "DoorFront", "as_input_add_stor_door")
+    uiStorage:addInputString("Door ID Gudang", "", "Door ID", "DOOR123", "DoorFront", "as_input_add_stor_door")
     uiStorage:addButton("➕ Tambah Gudang", "as_btn_add_stor_direct")
-    uiStorage:addButton("📍 Pakai / Tambah Gudang Sekarang", "as_btn_add_cur_stor")
-    uiStorage:addButton("📋 Kelola / Edit, Salin & Tempel Gudang", "as_btn_manage_storages")
+    uiStorage:addButton("📍 Tambah Gudang Aktif", "as_btn_add_cur_stor")
+    uiStorage:addButton("📋 Kelola Daftar Gudang", "as_btn_manage_storages")
     uiStorage:addButton("🗑️ Kosongkan Gudang", "as_btn_clear_stor_direct")
     uiStorage:addDivider()
-    uiStorage:addLabel("Cadangan File Gudang (Folder Download):")
-    uiStorage:addButton("📥 Simpan Gudang ke Download", "as_btn_save_storages")
-    uiStorage:addButton("📤 Muat Gudang dari Download", "as_btn_load_storages")
-    uiStorage:addDisplayList("Daftar Gudang Storage", "Default", "as_stor_display_list")
+    uiStorage:addLabel("Penyimpanan File Gudang (Download):")
+    uiStorage:addButton("📥 Simpan Gudang ke File", "as_btn_save_storages")
+    uiStorage:addButton("📤 Muat Gudang dari File", "as_btn_load_storages")
+    uiStorage:addDisplayList("Daftar Gudang Tersimpan", "Default", "as_stor_display_list")
     uiStorage:addDivider()
-    uiStorage:addSlider("Ambil Block Jika Sisa <=", 10, 100, CFG.restock_threshold, 5, false, "as_in_restock_thresh")
+    uiStorage:addSlider("Batas Minimum Restock", 10, 100, CFG.restock_threshold, 5, false, "as_in_restock_thresh")
 
-    -- Tab 4: Layout & Block (Sesuai Gambar 1)
-    local uiLayout = createNativeUI("4. Layout & Block", "Build")
-    uiLayout:addLabelApp("Layout Farm (Gambar 1)", "Build")
-    uiLayout:addLabel("Pilihan Block yang Ditaruh:")
-    uiLayout:addInputInt("ID Block", tostring(CFG.block_id), "ID Item", "8772 (Soil) / 2 (Dirt) / 102 (Plat)", "Tag", "as_in_block_id")
+    -- Tab 4: Desain & Layout
+    local uiLayout = createNativeUI("4. Desain & Layout", "Build")
+    uiLayout:addLabelApp("Pengaturan Tata Letak Farm", "Build")
+    uiLayout:addLabel("Spesifikasi Block Material:")
+    uiLayout:addInputInt("ID Block Material", tostring(CFG.block_id), "ID Item", "8772 (Soil) / 2 (Dirt) / 102 (Plat)", "Tag", "as_in_block_id")
     uiLayout:addButton("💾 Simpan ID Block", "as_btn_save_block_id")
     uiLayout:addDivider()
-    uiLayout:addToggle("Aktifkan ModFly (Anti Jatuh / Melayang)", CFG.use_modfly, "as_chk_modfly", true)
-    uiLayout:addToggle("Aktifkan Anti Lava / No Lava", CFG.use_anti_lava, "as_chk_anti_lava", true)
+    uiLayout:addToggle("Aktifkan ModFly (Melayang)", CFG.use_modfly, "as_chk_modfly", true)
+    uiLayout:addToggle("Aktifkan Anti Lava", CFG.use_anti_lava, "as_chk_anti_lava", true)
     uiLayout:addDivider()
-    uiLayout:addLabel("Pola Baris (Gambar 1):")
-    uiLayout:addSlider("Jarak Baris (Row Step)", 1, 4, CFG.row_step, 1, false, "as_in_row_step")
-    uiLayout:addSlider("Baris Mulai Y", 1, 10, CFG.row_start_y, 1, false, "as_in_start_y")
-    uiLayout:addSlider("Baris Akhir Y", 40, 56, CFG.row_end_y, 1, false, "as_in_end_y")
-    uiLayout:addSlider("Kolom Mulai X", 0, 10, CFG.row_start_x, 1, false, "as_in_start_x")
-    uiLayout:addSlider("Kolom Akhir X", 80, 99, CFG.row_end_x, 1, false, "as_in_end_x")
+    uiLayout:addLabel("Parameter Baris Horizontal:")
+    uiLayout:addSlider("Jarak Baris (Step)", 1, 4, CFG.row_step, 1, false, "as_in_row_step")
+    uiLayout:addSlider("Baris Awal (Y)", 1, 10, CFG.row_start_y, 1, false, "as_in_start_y")
+    uiLayout:addSlider("Baris Akhir (Y)", 40, 56, CFG.row_end_y, 1, false, "as_in_end_y")
+    uiLayout:addSlider("Kolom Awal (X)", 0, 10, CFG.row_start_x, 1, false, "as_in_start_x")
+    uiLayout:addSlider("Kolom Akhir (X)", 80, 99, CFG.row_end_x, 1, false, "as_in_end_x")
     uiLayout:addDivider()
-    uiLayout:addLabel("Kolom Water Elevator (Gambar 1):")
-    uiLayout:addToggle("Pasang Kolom Water di Sebelah Kiri", CFG.enable_water_column, "as_chk_enable_water", true)
-    uiLayout:addInputInt("ID Item Water", tostring(CFG.water_item_id), "Water ID", "822", "Water", "as_in_water_id")
-    uiLayout:addSlider("Kolom X Water", 0, 5, CFG.water_x, 1, false, "as_in_water_x")
+    uiLayout:addLabel("Elevator Air Vertikal:")
+    uiLayout:addToggle("Aktifkan Kolom Air Vertikal", CFG.enable_water_column, "as_chk_enable_water", true)
+    uiLayout:addInputInt("ID Item Air", tostring(CFG.water_item_id), "Water ID", "822", "Water", "as_in_water_id")
+    uiLayout:addSlider("Posisi Kolom Air (X)", 0, 5, CFG.water_x, 1, false, "as_in_water_x")
     uiLayout:addDivider()
-    uiLayout:addLabel("Kecepatan & Delay (ms):")
-    uiLayout:addSlider("Delay Taruh Block (ms)", 60, 400, CFG.delay_place, 10, false, "as_in_delay_place")
-    uiLayout:addSlider("Delay Jalan (ms)", 80, 500, CFG.delay_walk, 10, false, "as_in_delay_walk")
-    uiLayout:addSlider("Delay Pukul (ms)", 80, 400, CFG.delay_punch, 10, false, "as_in_delay_punch")
+    uiLayout:addLabel("Pengaturan Waktu Tunggu (Delay):")
+    uiLayout:addSlider("Delay Penempatan Block (ms)", 60, 400, CFG.delay_place, 10, false, "as_in_delay_place")
+    uiLayout:addSlider("Delay Pergerakan (ms)", 80, 500, CFG.delay_walk, 10, false, "as_in_delay_walk")
+    uiLayout:addSlider("Delay Pukulan (ms)", 80, 400, CFG.delay_punch, 10, false, "as_in_delay_punch")
 
-    -- Tab 5: Console & Status
-    local uiConsole = createNativeUI("5. Console & Status", "Terminal")
-    uiConsole:addLabelApp("Console & Log Aktivitas", "Terminal")
-    uiConsole:addDisplayList("Status Bot Real-time", "Default", "as_power_status_list")
+    -- Tab 5: Konsol & Log
+    local uiConsole = createNativeUI("5. Konsol & Log", "Terminal")
+    uiConsole:addLabelApp("Konsol Aktivitas Sistem", "Terminal")
+    uiConsole:addDisplayList("Status Operasi Sistem", "Default", "as_power_status_list")
     uiConsole:addDivider()
-    uiConsole:addButton("🗑️ Bersihkan Catatan Log", "as_btn_clear_log")
-    uiConsole:addDisplayList("Catatan Aktivitas", "Default", "as_log_display_list")
+    uiConsole:addButton("🗑️ Bersihkan Riwayat Log", "as_btn_clear_log")
+    uiConsole:addDisplayList("Riwayat Log Operasi", "Default", "as_log_display_list")
 
     -- Registrasi Kategori & Sub-Menu ke GrowLauncher
     pcall(addCategory, "Boren Soil", "Grass")
+    pcall(addCategory, "Boren Farm", "Grass")
     pcall(addIntoModule, uiWorld:generateJSON(), "Boren Soil")
     pcall(addIntoModule, uiLock:generateJSON(), "Boren Soil")
     pcall(addIntoModule, uiStorage:generateJSON(), "Boren Soil")
     pcall(addIntoModule, uiLayout:generateJSON(), "Boren Soil")
     pcall(addIntoModule, uiConsole:generateJSON(), "Boren Soil")
+    pcall(addIntoModule, uiWorld:generateJSON(), "Boren Farm")
+    pcall(addIntoModule, uiLock:generateJSON(), "Boren Farm")
+    pcall(addIntoModule, uiStorage:generateJSON(), "Boren Farm")
+    pcall(addIntoModule, uiLayout:generateJSON(), "Boren Farm")
+    pcall(addIntoModule, uiConsole:generateJSON(), "Boren Farm")
 end
 
 -- ============================================================================
@@ -2240,8 +2443,8 @@ local function handleSoilUIValue(vtype, name, value)
         local lblIn = readGLString("as_in_door_label", CFG.farm_door_id)
         if lblIn then CFG.farm_door_id = lblIn end
         savePrefs(CFG)
-        notifyUser("Pengaturan Lock berhasil disimpan!")
-        addLog("`2[Simpan Lock] `wPengaturan pengaman Gambar 2 disimpan.")
+        notifyUser("Pengaturan proteksi berhasil disimpan!")
+        addLog("`2[Simpan Proteksi] `wKonfigurasi proteksi kunci berhasil disimpan.")
     elseif name == "as_input_add_stor" then
         STATE.buf_new_stor = tostring(value or ""):upper():match("^%s*(.-)%s*$")
     elseif name == "as_input_add_stor_door" then
