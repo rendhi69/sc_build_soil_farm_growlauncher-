@@ -119,12 +119,16 @@ local CFG = {
     water_end_y             = tonumber(loadPref("water_end_y", 54)) or 54,
     
     -- Block / Soil Placement Layout (Sesuai Gambar 1)
-    block_id                = tonumber(loadPref("block_id", 2)) or 2,             -- 2 = Dirt, 100 = Soil, 102 = Platform
+    block_id                = tonumber(loadPref("block_id", 8772)) or 8772,       -- Default 8772 = Soil Block
     row_step                = tonumber(loadPref("row_step", 2)) or 2,             -- Tiap 2 baris (Y genap: 2, 4, 6... 54)
     row_start_y             = tonumber(loadPref("row_start_y", 2)) or 2,
     row_end_y               = tonumber(loadPref("row_end_y", 54)) or 54,
     row_start_x             = tonumber(loadPref("row_start_x", 2)) or 2,          -- X mulai (setelah kolom water)
     row_end_x               = tonumber(loadPref("row_end_x", 99)) or 99,
+    
+    -- Cheats & Movement Aids
+    use_modfly              = (loadPref("use_modfly", true) == true),
+    use_anti_lava           = (loadPref("use_anti_lava", true) == true),
     
     -- Multi-Storage Restock Settings
     restock_threshold       = tonumber(loadPref("restock_threshold", 30)) or 30,  -- Ambil ke gudang jika sisa di tas < 30
@@ -269,6 +273,7 @@ local KNOWN_ITEMS = {
     [1336] = "World Blast",
     [1796] = "Diamond Lock",
     [2810] = "Cave Blast",
+    [8772] = "Soil Block",
     [9640] = "Blue Gem Lock",
 }
 
@@ -662,6 +667,17 @@ end
 -- ============================================================================
 -- 7. MOVEMENT & PATHFINDING
 -- ============================================================================
+local function applyCheatToggles()
+    if not editToggle then return end
+    if CFG.use_modfly then
+        pcall(editToggle, "ModFly", true)
+    end
+    if CFG.use_anti_lava then
+        pcall(editToggle, "Anti Lava", true)
+        pcall(editToggle, "No Lava", true)
+    end
+end
+
 local function isTileSafe(tx, ty)
     if tx < 0 or tx > 99 or ty < 0 or ty > 59 then return false end
     local ok, t = pcall(getTile, tx, ty)
@@ -670,19 +686,58 @@ local function isTileSafe(tx, ty)
     return true
 end
 
+local function isTileSafeToStand(tx, ty)
+    if tx < 0 or tx > 99 or ty < 0 or ty > 53 then return false end
+    local ok, t = pcall(getTile, tx, ty)
+    if not ok or not t then return true end
+    local fg = t.fg or 0
+    if fg == 4 or fg == 8 or fg == 2 or fg == 10 or fg == 100 or fg == 8772 then
+        return false
+    end
+    if t.collidable then
+        return false
+    end
+    if CFG.use_anti_lava and ty < 53 then
+        local okB, below = pcall(getTile, tx, ty + 1)
+        if okB and below and below.fg == 4 then
+            return false
+        end
+    end
+    return true
+end
+
 local function moveSafeTo(tx, ty)
     tx = math.max(0, math.min(99, tx))
-    ty = math.max(0, math.min(59, ty))
+    ty = math.max(0, math.min(53, ty))
     local curX, curY = getPlayerPos()
     if curX == tx and curY == ty then return true end
 
     local pFn = FindPath or findPath or (getBot and getBot().findPath)
     if not pFn then return false end
 
+    applyCheatToggles()
+
+    local function nearestFree(cx, cy)
+        for r = 0, 3 do
+            for oy = -r, r do
+                for ox = -r, r do
+                    if math.max(math.abs(ox), math.abs(oy)) == r and isTileSafeToStand(cx + ox, cy + oy) then
+                        return cx + ox, cy + oy
+                    end
+                end
+            end
+        end
+        return cx, cy
+    end
+
     local CHUNK_LIMIT = 5
     local stuck = 0
     while STATE.running and not STATE.paused do
         curX, curY = getPlayerPos()
+        if not curX or not curY then
+            safeSleep(100)
+            break
+        end
         if curX == tx and curY == ty then return true end
 
         local dx = tx - curX
@@ -691,10 +746,13 @@ local function moveSafeTo(tx, ty)
         if dist == 0 then return true end
 
         local stepX, stepY = tx, ty
-        if dist > CHUNK_LIMIT and stuck < 2 then
+        local direct = (dist <= CHUNK_LIMIT) or stuck >= 1
+        if not direct then
             local ratio = CHUNK_LIMIT / dist
-            stepX = math.max(0, math.min(99, math.floor(curX + (dx * ratio) + 0.5)))
-            stepY = math.max(0, math.min(59, math.floor(curY + (dy * ratio) + 0.5)))
+            local ix = math.max(0, math.min(99, math.floor(curX + (dx * ratio) + 0.5)))
+            local iy = math.max(0, math.min(53, math.floor(curY + (dy * ratio) + 0.5)))
+            stepX, stepY = nearestFree(ix, iy)
+            if not stepX then stepX, stepY, direct = tx, ty, true end
         end
 
         local walkDelay = math.max(60, CFG.delay_walk)
@@ -708,10 +766,11 @@ local function moveSafeTo(tx, ty)
         end
 
         local waited = 0
-        local maxWait = math.max(120, math.min(1500, math.max(math.abs(curX - stepX), math.abs(curY - stepY)) * 60))
+        local stepDist = math.max(math.abs(curX - stepX), math.abs(curY - stepY))
+        local maxWait = math.max(120, math.min(1500, stepDist * 60))
         while waited < maxWait and STATE.running do
             local nx, ny = getPlayerPos()
-            if math.abs(nx - stepX) <= 1 and math.abs(ny - stepY) <= 1 then break end
+            if nx and ny and math.abs(nx - stepX) <= 1 and math.abs(ny - stepY) <= 1 then break end
             safeSleep(25)
             waited = waited + 25
         end
@@ -720,14 +779,23 @@ local function moveSafeTo(tx, ty)
         if npx == tx and npy == ty then return true end
         if npx == curX and npy == curY then
             stuck = stuck + 1
-            if stuck >= 3 then break end
+            if stuck >= 2 then
+                local okP, p = pcall(getLocal)
+                if okP and p and sendPacketRaw then
+                    pcall(sendPacketRaw, false, { type = 0, x = tx * 32, y = ty * 32 })
+                end
+                if stuck >= 3 then break end
+            end
         else
             stuck = 0
+            if direct and npx and npy and math.abs(npx - tx) <= 1 and math.abs(npy - ty) <= 1 then
+                break
+            end
         end
         safeSleep(math.floor(walkDelay * (0.85 + math.random() * 0.3)))
     end
     local fx, fy = getPlayerPos()
-    return (fx == tx and fy == ty)
+    return (fx and fy and math.abs(fx - tx) <= 1 and math.abs(fy - ty) <= 1)
 end
 
 -- ============================================================================
@@ -929,10 +997,16 @@ local function placeSoilRows(onNeedRestockCallback)
     addLog(string.format("`9[Place Rows] `0Memulai penempatan baris block (ID: %d - %s)...", CFG.block_id, getItemNameSafe(CFG.block_id)))
     local rowIdx = 0
 
+    applyCheatToggles()
+
     for y = CFG.row_start_y, CFG.row_end_y, CFG.row_step do
         if not STATE.running or STATE.paused then break end
         rowIdx = rowIdx + 1
         STATE.active_row = y
+
+        -- Bot terbang di koridor udara kosong persis di atas baris (y - 1)
+        local standY = (y - 1 >= 1) and (y - 1) or (y + 1)
+        applyCheatToggles()
 
         local startX, endX, stepX
         if rowIdx % 2 == 1 then
@@ -940,6 +1014,9 @@ local function placeSoilRows(onNeedRestockCallback)
         else
             startX, endX, stepX = CFG.row_end_x, CFG.row_start_x, -1
         end
+
+        -- Pindah ke awal koridor baris
+        moveSafeTo(startX, standY)
 
         local x = startX
         while (stepX > 0 and x <= endX) or (stepX < 0 and x >= endX) do
@@ -952,19 +1029,28 @@ local function placeSoilRows(onNeedRestockCallback)
                 if curCount < CFG.restock_threshold then
                     addLog(string.format("`e[Restock Diperlukan] `0Sisa block di tas (%d) < batas (%d). Menuju gudang...", curCount, CFG.restock_threshold))
                     if onNeedRestockCallback then
-                        local okRestock = onNeedRestockCallback(x, y)
+                        local okRestock = onNeedRestockCallback(x, standY)
                         if not okRestock then
                             addLog("`4[Restock Gagal] `oGagal mengambil block dari gudang. Berhenti.")
                             return false
                         end
+                        applyCheatToggles()
+                        moveSafeTo(x, standY)
                     end
                 end
 
-                if placeTileAt(x, y, CFG.block_id) then
-                    STATE.total_placed_blocks = STATE.total_placed_blocks + 1
-                    if STATE.total_placed_blocks % 50 == 0 then
-                        updatePowerStatusList()
-                    end
+                local px, py = getPlayerPos()
+                if math.abs(px - x) > 1 or py ~= standY then
+                    moveSafeTo(x, standY)
+                end
+
+                sendRawAction(x, y, CFG.block_id)
+                local d = math.floor(CFG.delay_place * (0.85 + math.random() * 0.3))
+                safeSleep(d)
+
+                STATE.total_placed_blocks = STATE.total_placed_blocks + 1
+                if STATE.total_placed_blocks % 50 == 0 then
+                    updatePowerStatusList()
                 end
             end
 
@@ -1023,6 +1109,7 @@ local function warpToWorld(worldName, doorID)
             end
             if curW:upper() == worldName then
                 safeSleep(1000)
+                applyCheatToggles()
                 return true
             end
         end
@@ -1239,6 +1326,35 @@ local function autoSoilMainLoop()
     addLog("`2[Semua Selesai] `wSeluruh world telah berhasil diselesaikan!")
     updatePowerStatusList()
     notifyUser("Auto Soil Builder Selesai!")
+end
+
+local function startSoilBot()
+    if STATE.running then return end
+    applyCheatToggles()
+    STATE.running = true
+    STATE.paused  = false
+    if editToggle then pcall(editToggle, "as_run_power", true) end
+    updatePowerStatusList()
+
+    local okCoro, errCoro = pcall(runCoroutine, function()
+        autoSoilMainLoop()
+    end)
+    if not okCoro then
+        STATE.running = false
+        STATE.paused = false
+        if editToggle then pcall(editToggle, "as_run_power", false) end
+        addLog("`4[Error Coroutine] `o" .. tostring(errCoro))
+        updatePowerStatusList()
+        if sendNotification then pcall(sendNotification, "Gagal mulai bot: " .. tostring(errCoro)) end
+    end
+end
+
+local function stopSoilBot()
+    STATE.running = false
+    STATE.paused = false
+    if editToggle then pcall(editToggle, "as_run_power", false) end
+    addLog("`4[Berhenti] `0Bot dihentikan oleh user.")
+    updatePowerStatusList()
 end
 
 -- ============================================================================
@@ -1855,6 +1971,7 @@ local function registerNativeSoilUI()
     uiWorld:addInputString("Nama World", "", "World", "WORLD1", "Public", "as_input_add_world")
     uiWorld:addInputString("Door ID (Opsional)", "", "Door ID", "Kosong = White Door", "DoorFront", "as_input_add_door")
     uiWorld:addButton("➕ Tambah World ke Antrean", "as_btn_add_world")
+    uiWorld:addButton("📍 Pakai / Tambah World Sekarang ke Antrean", "as_btn_add_cur_world")
     uiWorld:addButton("📋 Kelola / Edit, Salin & Tempel World", "as_btn_manage_worlds")
     uiWorld:addButton("🗑️ Kosongkan Antrean World", "as_btn_clear_worlds")
     uiWorld:addDivider()
@@ -1899,6 +2016,7 @@ local function registerNativeSoilUI()
     uiStorage:addInputString("Nama Gudang", "", "World", "GUDANG1", "Inventory", "as_input_add_stor")
     uiStorage:addInputString("Door Gudang", "", "Door ID", "DOOR123", "DoorFront", "as_input_add_stor_door")
     uiStorage:addButton("➕ Tambah Gudang", "as_btn_add_stor_direct")
+    uiStorage:addButton("📍 Pakai / Tambah Gudang Sekarang", "as_btn_add_cur_stor")
     uiStorage:addButton("📋 Kelola / Edit, Salin & Tempel Gudang", "as_btn_manage_storages")
     uiStorage:addButton("🗑️ Kosongkan Gudang", "as_btn_clear_stor_direct")
     uiStorage:addDivider()
@@ -1913,8 +2031,11 @@ local function registerNativeSoilUI()
     local uiLayout = createNativeUI("4. Layout & Block", "Build")
     uiLayout:addLabelApp("Layout Farm (Gambar 1)", "Build")
     uiLayout:addLabel("Pilihan Block yang Ditaruh:")
-    uiLayout:addInputInt("ID Block", tostring(CFG.block_id), "ID Item", "2 (Dirt) / 100 (Soil) / 102 (Plat)", "Tag", "as_in_block_id")
+    uiLayout:addInputInt("ID Block", tostring(CFG.block_id), "ID Item", "8772 (Soil) / 2 (Dirt) / 102 (Plat)", "Tag", "as_in_block_id")
     uiLayout:addButton("💾 Simpan ID Block", "as_btn_save_block_id")
+    uiLayout:addDivider()
+    uiLayout:addToggle("Aktifkan ModFly (Anti Jatuh / Melayang)", CFG.use_modfly, "as_chk_modfly", true)
+    uiLayout:addToggle("Aktifkan Anti Lava / No Lava", CFG.use_anti_lava, "as_chk_anti_lava", true)
     uiLayout:addDivider()
     uiLayout:addLabel("Pola Baris (Gambar 1):")
     uiLayout:addSlider("Jarak Baris (Row Step)", 1, 4, CFG.row_step, 1, false, "as_in_row_step")
@@ -1992,22 +2113,16 @@ local function handleSoilUIValue(vtype, name, value)
     if name == "as_run_power" then
         local state = toBoolVal(value)
         if state and not STATE.running then
-            if async then async(autoSoilMainLoop) else autoSoilMainLoop() end
+            startSoilBot()
         elseif not state and STATE.running then
-            STATE.running = false
-            STATE.paused = false
-            addLog("`4[Berhenti] `0Bot dihentikan oleh user.")
+            stopSoilBot()
         end
-        updatePowerStatusList()
     elseif name == "as_pause_toggle" then
         STATE.paused = toBoolVal(value)
         addLog(STATE.paused and "`e[Jeda] `0Bot dijeda sementara." or "`2[Lanjut] `0Bot dilanjutkan.")
         updatePowerStatusList()
     elseif name == "as_btn_stop" then
-        STATE.running = false
-        STATE.paused = false
-        addLog("`4[Berhenti] `0Bot dihentikan.")
-        updatePowerStatusList()
+        stopSoilBot()
     elseif name == "as_chk_mode_random" then
         CFG.world_mode = toBoolVal(value) and "RANDOM" or "MANUAL"
         savePrefs(CFG)
@@ -2054,6 +2169,32 @@ local function handleSoilUIValue(vtype, name, value)
         else
             notifyUser("Isi nama world terlebih dahulu!")
             addLog("`4[Peringatan] `oNama world tidak boleh kosong!")
+        end
+    elseif name == "as_btn_add_cur_world" then
+        local curW = getWorldNameSafe()
+        if curW == "" or curW == "EXIT" then
+            addLog("`4[Gagal] `oKarakter belum masuk ke dalam world.")
+            notifyUser("Karakter belum masuk ke dalam world.")
+            return
+        end
+        local exists = false
+        for _, w in ipairs(CFG.farm_world_list) do
+            if (w.name or ""):upper() == curW:upper() then
+                exists = true
+                break
+            end
+        end
+        if exists then
+            addLog("`e[Info] `0World " .. curW .. " sudah ada di antrean.")
+            notifyUser("World " .. curW .. " sudah ada di antrean.")
+        else
+            local doorVal = (STATE.buf_new_door and STATE.buf_new_door ~= "") and STATE.buf_new_door or CFG.farm_door_id
+            table.insert(CFG.farm_world_list, { name = curW, door = doorVal, done = false })
+            savePrefs(CFG)
+            saveWorldsToFile()
+            updateWorldDisplayList()
+            addLog("`2[Sukses] `wWorld sekarang: " .. curW .. " ditambahkan ke antrean!")
+            notifyUser("World " .. curW .. " ditambahkan!")
         end
     elseif name == "as_btn_clear_worlds" then
         CFG.farm_world_list = {}
@@ -2127,6 +2268,32 @@ local function handleSoilUIValue(vtype, name, value)
             notifyUser("Isi nama gudang terlebih dahulu!")
             addLog("`4[Peringatan] `oNama gudang tidak boleh kosong!")
         end
+    elseif name == "as_btn_add_cur_stor" then
+        local curW = getWorldNameSafe()
+        if curW == "" or curW == "EXIT" then
+            addLog("`4[Gagal] `oKarakter belum masuk ke dalam world.")
+            notifyUser("Karakter belum masuk ke dalam world.")
+            return
+        end
+        local exists = false
+        for _, s in ipairs(CFG.storage_list) do
+            if (s.name or ""):upper() == curW:upper() then
+                exists = true
+                break
+            end
+        end
+        if exists then
+            addLog("`e[Info] `0Gudang " .. curW .. " sudah ada di daftar.")
+            notifyUser("Gudang " .. curW .. " sudah ada di daftar.")
+        else
+            local dVal = (STATE.buf_new_stor_door and STATE.buf_new_stor_door ~= "") and STATE.buf_new_stor_door or CFG.storage_door_default
+            table.insert(CFG.storage_list, { name = curW, door = dVal })
+            savePrefs(CFG)
+            saveStoragesToFile()
+            updateStorageDisplayList()
+            addLog("`2[Sukses] `wGudang sekarang: " .. curW .. " ditambahkan ke daftar!")
+            notifyUser("Gudang " .. curW .. " ditambahkan!")
+        end
     elseif name == "as_btn_clear_stor_direct" then
         CFG.storage_list = {}
         savePrefs(CFG)
@@ -2189,6 +2356,14 @@ local function handleSoilUIValue(vtype, name, value)
     elseif name == "as_btn_clear_log" then
         STATE.log_messages = {}
         updateLogDisplayList()
+    elseif name == "as_chk_modfly" then
+        CFG.use_modfly = toBoolVal(value)
+        savePrefs(CFG)
+        applyCheatToggles()
+    elseif name == "as_chk_anti_lava" then
+        CFG.use_anti_lava = toBoolVal(value)
+        savePrefs(CFG)
+        applyCheatToggles()
     end
 end
 
@@ -2206,12 +2381,12 @@ local ALL_UI_ALIASES = {
     "as_run_power", "as_pause_toggle", "as_btn_stop",
     "as_chk_mode_random", "as_in_rnd_len", "as_chk_rnd_num", "as_in_rnd_prefix", "as_in_rnd_target",
     "as_chk_auto_blast", "as_in_blast_id",
-    "as_input_add_world", "as_input_add_door", "as_btn_add_world", "as_btn_manage_worlds", "as_btn_clear_worlds",
+    "as_input_add_world", "as_input_add_door", "as_btn_add_world", "as_btn_add_cur_world", "as_btn_manage_worlds", "as_btn_clear_worlds",
     "as_btn_save_worlds", "as_btn_load_worlds",
     "as_chk_enable_lock", "as_in_id_wl", "as_chk_wl_public", "as_in_id_sl", "as_in_id_jammer", "as_in_id_blocker", "as_in_id_door", "as_in_door_label", "as_btn_save_lock_cfg",
-    "as_input_add_stor", "as_input_add_stor_door", "as_btn_add_stor_direct", "as_btn_manage_storages", "as_btn_clear_stor_direct",
+    "as_input_add_stor", "as_input_add_stor_door", "as_btn_add_stor_direct", "as_btn_add_cur_stor", "as_btn_manage_storages", "as_btn_clear_stor_direct",
     "as_btn_save_storages", "as_btn_load_storages", "as_in_restock_thresh",
-    "as_in_block_id", "as_btn_save_block_id", "as_in_row_step", "as_in_start_y", "as_in_end_y", "as_in_start_x", "as_in_end_x",
+    "as_in_block_id", "as_btn_save_block_id", "as_chk_modfly", "as_chk_anti_lava", "as_in_row_step", "as_in_start_y", "as_in_end_y", "as_in_start_x", "as_in_end_x",
     "as_chk_enable_water", "as_in_water_id", "as_in_water_x",
     "as_in_delay_place", "as_in_delay_walk", "as_in_delay_punch", "as_btn_clear_log"
 }
