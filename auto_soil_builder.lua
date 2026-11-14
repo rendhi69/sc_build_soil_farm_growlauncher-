@@ -1,99 +1,37 @@
----@diagnostic disable: undefined-global, lowercase-global
 -- ============================================================================
--- AUTO SOIL & BLOCK BUILDER BY BOREN STORE - GROWLAUNCHER
--- Sistem Pembuatan Farm Terpadu (Baris Block & Elevator Air) serta Proteksi Kunci Lengkap
--- Fitur: Auto Blast World, Multi-Storage Restock, Multi-World Farm Management,
---        Water Column, Persistent File Backup di Folder Download HP / PC
+-- AUTO SOIL & BLOCK BUILDER - BOREN STORE OFFICIAL
+-- ============================================================================
+-- Framework : GrowLauncher Lua (Android & PC Windows)
+-- Developer : Boren Store
+-- Modul     : Auto Placement Soil / Block Farm + Lock Enclosure + Multi-Storage
+-- Lisensi   : Hak Cipta Dilindungi Undang-Undang
 -- ============================================================================
 
 -- ============================================================================
--- 1. PURE LUA JSON ENCODER (STANDAR GROWLAUNCHER NATIVE UI)
+-- 1. IDENTITAS SISTEM & METADATA
 -- ============================================================================
-local function escapeJsonStr(s)
-    s = tostring(s or "")
-    s = s:gsub("\\", "\\\\")
-    s = s:gsub('"', '\\"')
-    s = s:gsub("\n", "\\n")
-    s = s:gsub("\r", "\\r")
-    s = s:gsub("\t", "\\t")
-    return '"' .. s .. '"'
-end
+local SCRIPT_NAME    = "Auto Soil Builder"
+local SCRIPT_VERSION = "2.3.0"
+local SCRIPT_BUILD   = "2026.11.15-PRO"
+local SCRIPT_AUTHOR  = "Boren Store"
 
-local function encodeJsonValue(v)
-    local t = type(v)
-    if t == "string" then
-        return escapeJsonStr(v)
-    elseif t == "number" or t == "boolean" then
-        return tostring(v)
-    elseif t == "table" then
-        local isArr = (#v > 0) or (next(v) == nil)
-        if isArr then
-            local parts = {}
-            for i = 1, #v do
-                parts[i] = encodeJsonValue(v[i])
-            end
-            return "[" .. table.concat(parts, ",") .. "]"
-        else
-            local parts = {}
-            for k, val in pairs(v) do
-                table.insert(parts, escapeJsonStr(k) .. ":" .. encodeJsonValue(val))
-            end
-            return "{" .. table.concat(parts, ",") .. "}"
-        end
+-- ============================================================================
+-- 2. KONFIGURASI LENGKAP & DEFAULT PREFERENCES
+-- ============================================================================
+local function loadPref(key, defaultVal)
+    if not saved or not saved.get then return defaultVal end
+    local ok, res = pcall(saved.get, saved, key, defaultVal)
+    if ok and res ~= nil then
+        return res
     end
-    return "null"
-end
-
-local function jsonEncode(val)
-    return encodeJsonValue(val)
-end
-
--- ============================================================================
--- 2. SAFE PREFERENCES & CONFIGURATION
--- ============================================================================
-local ok_pref, PreferencesMod = pcall(require, "Preferences")
-if not (ok_pref and PreferencesMod) then
-    ok_pref, PreferencesMod = pcall(require, "preferences")
-end
-if not (ok_pref and PreferencesMod) and Preferences then
-    ok_pref = true
-    PreferencesMod = Preferences
-end
-
-local saved = nil
-if ok_pref and PreferencesMod and PreferencesMod.new then
-    pcall(function()
-        local p = PreferencesMod:new("boren_soil_v1.json")
-        if p and p.load then pcall(p.load, p) end
-        saved = p
-    end)
-end
-
-local function loadPref(key, default)
-    if saved and saved.get then
-        local ok, val = pcall(function() return saved:get(key, default) end)
-        if ok and val ~= nil then
-            return val
-        end
-    end
-    return default
-end
-
-local function setPref(key, val)
-    if not saved or not saved.set then return end
-    pcall(function()
-        saved:set(key, val)
-        if saved.save then saved:save() end
-    end)
+    return defaultVal
 end
 
 local CFG = {
-    -- Mode Operasi: "MANUAL" (antrean world) atau "RANDOM" (cari & blast otomatis)
-    world_mode              = loadPref("world_mode", "MANUAL"),
-    
-    -- Random World Search Settings
+    -- Mode Operasi World
+    world_mode              = tostring(loadPref("world_mode", "LIST")),           -- "LIST" atau "RANDOM"
     random_letter_count     = tonumber(loadPref("random_letter_count", 8)) or 8,
-    random_with_number      = (loadPref("random_with_number", true) == true),
+    random_with_number      = (loadPref("random_with_number", false) == true),
     random_prefix           = tostring(loadPref("random_prefix", "")),
     random_target_count     = tonumber(loadPref("random_target_count", 20)) or 20,
     
@@ -101,15 +39,14 @@ local CFG = {
     auto_use_blast          = (loadPref("auto_use_blast", false) == true),
     blast_item_id           = tonumber(loadPref("blast_item_id", 1336)) or 1336, -- 1336 = World Blast, 2810 = Cave Blast
     
-    -- Pengaturan Proteksi Kunci Pintu
+    -- Pengaturan Proteksi Kunci Pintu (DEFAULT ON)
     enable_lock_enclosure   = (loadPref("enable_lock_enclosure", true) == true),
     lock_id_wl              = tonumber(loadPref("lock_id_wl", 242)) or 242,       -- World Lock
     lock_id_sl              = tonumber(loadPref("lock_id_sl", 202)) or 202,       -- Small Lock
     lock_id_jammer          = tonumber(loadPref("lock_id_jammer", 226)) or 226,   -- Signal Jammer
-    lock_id_blocker         = tonumber(loadPref("lock_id_blocker", 828)) or 828,  -- Blocker Door (Air Vent)
-    lock_id_door            = tonumber(loadPref("lock_id_door", 12)) or 12,       -- Wooden Door
+    lock_id_door            = tonumber(loadPref("lock_id_door", 12)) or 12,       -- Wooden Door di (0, 0)
     farm_door_id            = tostring(loadPref("farm_door_id", "BOREN")),        -- Label / ID Door
-    wl_make_public          = (loadPref("wl_make_public", false) == true),
+    wl_make_public          = (loadPref("wl_make_public", true) == true),
     
     -- Pengaturan Elevator Air Vertikal
     enable_water_column     = (loadPref("enable_water_column", true) == true),
@@ -141,14 +78,16 @@ local CFG = {
     
     -- Persistent File Names (Folder Download HP / PC)
     world_file_name         = loadPref("world_file_name", "boren_soil_worlds.txt"),
-    storage_file_name       = loadPref("storage_file_name", "boren_soil_storages.txt"),
+    tool_file_name          = loadPref("tool_file_name", "boren_soil_tools.txt"),
+    block_file_name         = loadPref("block_file_name", "boren_soil_blocks.txt"),
     
     -- Discord Webhook
     webhook_url             = tostring(loadPref("webhook_url", "")),
     
-    -- World & Storage Lists
-    farm_world_list         = {},
-    storage_list            = {},
+    -- 3 Kategori World Terpisah
+    farm_world_list         = {}, -- World Put / Antrean Farm
+    storage_tool_list       = {}, -- World untuk Alat (WL, SL, Jammer, Wooden Door)
+    storage_block_list      = {}, -- World untuk Block (Soil Block 8772)
 }
 
 local STATE = {
@@ -165,8 +104,10 @@ local STATE = {
     -- Buffer input
     buf_new_world           = "",
     buf_new_door            = "",
-    buf_new_stor            = "",
-    buf_new_stor_door       = "",
+    buf_new_tool            = "",
+    buf_new_tool_door       = "",
+    buf_new_block           = "",
+    buf_new_block_door      = "",
     
     -- Active world progression
     active_row              = 2,
@@ -182,7 +123,7 @@ local function savePrefs(cfg)
                 saved:set(k, v)
             end
         end
-        -- Simpan daftar world sebagai serialized string
+        -- Simpan daftar world put
         local wParts = {}
         if type(cfg.farm_world_list) == "table" then
             for _, entry in ipairs(cfg.farm_world_list) do
@@ -194,16 +135,28 @@ local function savePrefs(cfg)
         end
         saved:set("farm_world_list_str", table.concat(wParts, ";"))
 
-        -- Simpan daftar storage
-        local sParts = {}
-        if type(cfg.storage_list) == "table" then
-            for _, entry in ipairs(cfg.storage_list) do
+        -- Simpan daftar world gudang alat
+        local tParts = {}
+        if type(cfg.storage_tool_list) == "table" then
+            for _, entry in ipairs(cfg.storage_tool_list) do
                 if type(entry) == "table" and entry.name and entry.name ~= "" then
-                    table.insert(sParts, tostring(entry.name) .. "|" .. tostring(entry.door or ""))
+                    table.insert(tParts, tostring(entry.name) .. "|" .. tostring(entry.door or ""))
                 end
             end
         end
-        saved:set("storage_list_str", table.concat(sParts, ";"))
+        saved:set("storage_tool_list_str", table.concat(tParts, ";"))
+
+        -- Simpan daftar world gudang block
+        local bParts = {}
+        if type(cfg.storage_block_list) == "table" then
+            for _, entry in ipairs(cfg.storage_block_list) do
+                if type(entry) == "table" and entry.name and entry.name ~= "" then
+                    table.insert(bParts, tostring(entry.name) .. "|" .. tostring(entry.door or ""))
+                end
+            end
+        end
+        saved:set("storage_block_list_str", table.concat(bParts, ";"))
+
         saved:save()
     end)
 end
@@ -225,13 +178,27 @@ pcall(function()
         end
     end
 
-    local sStr = loadPref("storage_list_str", "")
-    if sStr and sStr ~= "" then
-        CFG.storage_list = {}
-        for token in string.gmatch(sStr, "[^;]+") do
+    local tStr = loadPref("storage_tool_list_str", "")
+    if tStr and tStr ~= "" then
+        CFG.storage_tool_list = {}
+        for token in string.gmatch(tStr, "[^;]+") do
             local sName, sDoor = string.match(token, "^([^|]*)|?([^|]*)$")
             if sName and sName ~= "" then
-                table.insert(CFG.storage_list, {
+                table.insert(CFG.storage_tool_list, {
+                    name = sName:upper(),
+                    door = (sDoor or ""):upper()
+                })
+            end
+        end
+    end
+
+    local bStr = loadPref("storage_block_list_str", "")
+    if bStr and bStr ~= "" then
+        CFG.storage_block_list = {}
+        for token in string.gmatch(bStr, "[^;]+") do
+            local sName, sDoor = string.match(token, "^([^|]*)|?([^|]*)$")
+            if sName and sName ~= "" then
+                table.insert(CFG.storage_block_list, {
                     name = sName:upper(),
                     door = (sDoor or ""):upper()
                 })
@@ -243,68 +210,59 @@ end)
 -- Forward declarations of update functions
 local updatePowerStatusList = nil
 local updateWorldDisplayList = nil
-local updateStorageDisplayList = nil
+local updateToolDisplayList = nil
+local updateBlockDisplayList = nil
 local updateLogDisplayList = nil
 
 -- ============================================================================
 -- 3. ITEM CONSTANTS & SAFE NAME RESOLVER
 -- ============================================================================
-local KNOWN_ITEMS = {
-    [0]    = "Blank / Udara",
-    [2]    = "Dirt",
-    [3]    = "Dirt Seed",
-    [4]    = "Lava",
-    [6]    = "Main White Door",
-    [8]    = "Bedrock",
-    [10]   = "Rock",
-    [12]   = "Wooden Door",
-    [14]   = "Cave Background",
-    [18]   = "Fist / Punch",
-    [32]   = "Wrench",
-    [100]  = "Soil Block / Mars Rock",
-    [102]  = "Wood Platform",
-    [202]  = "Small Lock",
-    [204]  = "Big Lock",
-    [206]  = "Huge Lock",
-    [226]  = "Signal Jammer",
-    [242]  = "World Lock",
-    [822]  = "Water",
-    [828]  = "Air Vent",
-    [1336] = "World Blast",
-    [1796] = "Diamond Lock",
-    [2810] = "Cave Blast",
-    [8772] = "Soil Block",
-    [9640] = "Blue Gem Lock",
+local ITEM = {
+    DIRT        = 2,
+    MAIN_DOOR   = 6,
+    BEDROCK     = 8,
+    WOODEN_DOOR = 12,
+    LAVA        = 10,
+    ROCK        = 102,
+    SMALL_LOCK  = 202,
+    JAMMER      = 226,
+    WORLD_LOCK  = 242,
+    WATER       = 822,
+    AIR_VENT    = 828,
+    BLAST_WORLD = 1336,
+    BLAST_CAVE  = 2810,
+    SOIL_BLOCK  = 8772,
 }
 
-local LOCK_IDS = {
-    242, 9640, 202, 204, 206, 1796, 4994, 7188, 408, 2950,
-    4428, 4802, 5814, 5260, 5980, 8470, 10410, 11550, 11586
-}
+local LOCK_IDS = { 202, 204, 206, 242, 1796, 7188, 4994, 226, 828, 12 }
 
 local function getItemNameSafe(itemID)
     itemID = tonumber(itemID) or 0
-    if itemID <= 0 then return "None" end
-    if KNOWN_ITEMS[itemID] then return KNOWN_ITEMS[itemID] end
+    if itemID == ITEM.SOIL_BLOCK  then return "Soil Block" end
+    if itemID == ITEM.DIRT        then return "Dirt" end
+    if itemID == ITEM.ROCK        then return "Rock" end
+    if itemID == ITEM.LAVA        then return "Lava" end
+    if itemID == ITEM.MAIN_DOOR   then return "White Door (Exit)" end
+    if itemID == ITEM.WOODEN_DOOR then return "Wooden Door" end
+    if itemID == ITEM.BEDROCK     then return "Bedrock" end
+    if itemID == ITEM.SMALL_LOCK  then return "Small Lock" end
+    if itemID == ITEM.WORLD_LOCK  then return "World Lock" end
+    if itemID == ITEM.JAMMER      then return "Signal Jammer" end
+    if itemID == ITEM.AIR_VENT    then return "Blocker Door (Air Vent)" end
+    if itemID == ITEM.WATER       then return "Water" end
+    if itemID == ITEM.BLAST_WORLD then return "World Blast" end
+    if itemID == ITEM.BLAST_CAVE  then return "Cave Blast" end
 
-    if getItemInfoByID then
-        local ok, info = pcall(getItemInfoByID, itemID)
+    if getItemInfo then
+        local ok, info = pcall(getItemInfo, itemID)
         if ok and info and info.name and info.name ~= "" then
-            return tostring(info.name)
+            return info.name
         end
     end
-
-    if growtopia and growtopia.getItemName then
-        local ok, n = pcall(growtopia.getItemName, itemID)
-        if ok and n and n ~= "" then
-            return tostring(n)
-        end
-    end
-
-    if item_info_manager and item_info_manager.getItemName then
-        local ok, n = pcall(item_info_manager.getItemName, itemID)
-        if ok and n and n ~= "" then
-            return tostring(n)
+    if getBot and getBot().getItemInfo then
+        local ok, info = pcall(getBot().getItemInfo, getBot(), itemID)
+        if ok and info and info.name and info.name ~= "" then
+            return info.name
         end
     end
 
@@ -339,36 +297,64 @@ local function getWorldNameSafe()
                     return w.name:upper()
                 end
             end
-            if b.world and type(b.world) == "string" and b.world ~= "" and b.world:upper() ~= "EXIT" then
-                return b.world:upper()
-            end
         end
     end
-    if getLocal then
-        local ok, p = pcall(getLocal)
-        if ok and p and p.world and type(p.world) == "string" and p.world ~= "" and p.world:upper() ~= "EXIT" then
-            return p.world:upper()
-        end
-    end
-    return ""
+    return "EXIT"
 end
 
 -- ============================================================================
--- 4. LOGGING, WEBHOOK & DISPLAY UPDATERS
+-- 4. JSON SERIALIZER & DISPLAY LIST FORMATTERS
 -- ============================================================================
+local function jsonEncode(val)
+    local t = type(val)
+    if t == "table" then
+        local isArray = true
+        local n = 0
+        for k, _ in pairs(val) do
+            n = n + 1
+            if type(k) ~= "number" or k ~= n then
+                isArray = false
+                break
+            end
+        end
+        if isArray then
+            local parts = {}
+            for _, v in ipairs(val) do
+                table.insert(parts, jsonEncode(v))
+            end
+            return "[" .. table.concat(parts, ",") .. "]"
+        else
+            local parts = {}
+            for k, v in pairs(val) do
+                table.insert(parts, string.format("%s:%s", jsonEncode(tostring(k)), jsonEncode(v)))
+            end
+            return "{" .. table.concat(parts, ",") .. "}"
+        end
+    elseif t == "string" then
+        local escaped = val:gsub('\\', '\\\\'):gsub('"', '\\"'):gsub('\n', '\\n'):gsub('\r', '\\r'):gsub('\t', '\\t')
+        return '"' .. escaped .. '"'
+    elseif t == "number" or t == "boolean" then
+        return tostring(val)
+    else
+        return "null"
+    end
+end
+
 local function addLog(msg)
-    local tStr = os.date("%H:%M:%S")
-    local line = string.format("[%s] %s", tStr, msg)
+    local timestamp = os.date("%H:%M:%S")
+    local line = string.format("[%s] %s", timestamp, msg)
     table.insert(STATE.log_messages, 1, line)
-    while #STATE.log_messages > 50 do
+    if #STATE.log_messages > 150 then
         table.remove(STATE.log_messages)
     end
     if LogToConsole then
-        pcall(LogToConsole, "`9[Boren Soil] `0" .. tostring(msg))
-    else
-        print("[Boren Soil] " .. tostring(msg))
+        pcall(LogToConsole, line)
+    elseif print then
+        pcall(print, line)
     end
-    if updateLogDisplayList then pcall(updateLogDisplayList) end
+    if updateLogDisplayList then
+        pcall(updateLogDisplayList)
+    end
 end
 
 local function notifyUser(msg)
@@ -379,84 +365,118 @@ local function notifyUser(msg)
     end
 end
 
-local function safeSleep(ms)
-    ms = tonumber(ms) or 100
-    if ms <= 0 then return end
-    if sleep then
-        sleep(ms)
-    else
-        local st = os.clock()
-        while (os.clock() - st) * 1000 < ms do end
+local function sendWebhookNotification(title, description, fields)
+    if not CFG.webhook_url or CFG.webhook_url == "" then return end
+    local payload = {
+        embeds = {
+            {
+                title = title or "Boren Farm Builder Report",
+                description = description or "",
+                color = 3066993,
+                fields = fields or {},
+                footer = { text = "Boren Store Official • Auto Soil Builder" },
+                timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+            }
+        }
+    }
+    local jsonStr = jsonEncode(payload)
+    if httpPost then
+        pcall(httpPost, CFG.webhook_url, jsonStr, "application/json")
+    elseif httpRequest then
+        pcall(httpRequest, "POST", CFG.webhook_url, jsonStr, { ["Content-Type"] = "application/json" })
     end
 end
 
-local function sendWebhookNotification(eventTitle, eventDesc)
-    if not CFG.webhook_url or CFG.webhook_url == "" then return end
-    local payload = string.format([[
-        $url = "%s"
-        $embed = @{
-            title = "%s"
-            description = "%s"
-            color = 3447003
-            footer = @{ text = "Boren Soil Builder - %s" }
-        }
-        $body = @{ embeds = @($embed) } | ConvertTo-Json -Depth 4
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        Invoke-RestMethod -Uri $url -Method Post -Body $body -ContentType 'application/json'
-    ]], CFG.webhook_url, eventTitle, eventDesc, os.date("%Y-%m-%d %H:%M:%S"))
-
-    pcall(function()
-        local pipe = io.popen("powershell -command -", "w")
-        if pipe then
-            pipe:write(payload)
-            pipe:close()
+local function getInvCount(itemID)
+    itemID = tonumber(itemID) or 0
+    if itemID <= 0 then return 0 end
+    if getInventory then
+        local ok, inv = pcall(getInventory)
+        if ok and inv then
+            local items = inv.items or inv
+            for _, it in pairs(items) do
+                local id = it.id or it.item or 0
+                if id == itemID then
+                    return it.count or it.amount or 0
+                end
+            end
         end
-    end)
+    end
+    if getBot and getBot().getInventory then
+        local ok, inv = pcall(getBot().getInventory, getBot())
+        if ok and inv then
+            local items = inv.items or inv
+            for _, it in pairs(items) do
+                local id = it.id or it.item or 0
+                if id == itemID then
+                    return it.count or it.amount or 0
+                end
+            end
+        end
+    end
+    return 0
 end
 
--- UI Real-time Updaters via editValue
 updatePowerStatusList = function()
     if not editValue then return end
-    local statusTitle = STATE.running and (STATE.paused and "STATUS: DIJEDA (PAUSE)" or "STATUS: SEDANG BERJALAN") or "STATUS: BERHENTI (OFF)"
-    local curW = (STATE.current_world ~= "") and STATE.current_world or "(Belum masuk world)"
-    local blockInfo = string.format("%s (ID: %d)", getItemNameSafe(CFG.block_id), CFG.block_id)
-    local pList = {
-        { statusTitle, STATE.status_text or "Siap digunakan" },
-        { "World Farm Aktif", curW },
-        { "Block yang Ditaruh", blockInfo },
-        { "Total Block Terpasang", string.format("%d Block", STATE.total_placed_blocks) },
-        { "Total World Selesai", string.format("%d World", STATE.total_worlds_completed) },
+    local blockName = getItemNameSafe(CFG.block_id)
+    local curW = getWorldNameSafe()
+    local runningStr = STATE.running and (STATE.paused and "`ePAUSED" or "`2RUNNING") or "`4STOPPED"
+    local list = {
+        { "Status Mesin", runningStr },
+        { "World Terkini", (curW ~= "EXIT" and curW or "-") },
+        { "Antrean World Put", string.format("%d World", #CFG.farm_world_list) },
+        { "Gudang Alat", string.format("%d World", #CFG.storage_tool_list) },
+        { "Gudang Block", string.format("%d World", #CFG.storage_block_list) },
+        { "Block Terpilih", string.format("%s (ID %d)", blockName, CFG.block_id) },
+        { "Stok Block di Tas", string.format("%d Pcs", getInvCount(CFG.block_id)) },
+        { "Total Terpasang", string.format("%d Block", STATE.total_placed_blocks) },
+        { "Target Selesai", string.format("%d World", STATE.total_worlds_completed) },
     }
-    pcall(editValue, "as_power_status_list", jsonEncode(pList))
+    pcall(editValue, "as_power_status_list", jsonEncode(list))
 end
 
 updateWorldDisplayList = function()
     if not editValue then return end
     local list = {}
     for idx, w in ipairs(CFG.farm_world_list) do
-        local status = w.done and "`2[SELESAI]" or "`e[ANTREAN]"
         local dInfo = (w.door and w.door ~= "") and (" [Door: " .. w.door .. "]") or ""
+        local sInfo = w.done and "`2[DONE]`0" or "`e[PENDING]`0"
         table.insert(list, {
             string.format("%d. %s%s", idx, w.name, dInfo),
-            status
+            sInfo
         })
     end
-    if #list == 0 then table.insert(list, { "Antrean world kosong", "Gunakan form di atas untuk menambah" }) end
+    if #list == 0 then table.insert(list, { "Belum ada antrean world put", "Tambahkan world di form di atas" }) end
     pcall(editValue, "as_world_display_list", jsonEncode(list))
 end
 
-updateStorageDisplayList = function()
+updateToolDisplayList = function()
     if not editValue then return end
     local list = {}
-    for idx, s in ipairs(CFG.storage_list) do
+    for idx, s in ipairs(CFG.storage_tool_list) do
         local dInfo = (s.door and s.door ~= "") and (" [Door: " .. s.door .. "]") or ""
         table.insert(list, {
             string.format("%d. %s%s", idx, s.name, dInfo),
-            "Gudang Block"
+            "Gudang Alat (WL, SL, Jammer, Door)"
         })
     end
-    if #list == 0 then table.insert(list, { "Belum ada gudang", "Tambahkan gudang di form di atas" }) end
-    pcall(editValue, "as_stor_display_list", jsonEncode(list))
+    if #list == 0 then table.insert(list, { "Belum ada gudang alat", "Tambahkan world alat di form di atas" }) end
+    pcall(editValue, "as_tool_display_list", jsonEncode(list))
+end
+
+updateBlockDisplayList = function()
+    if not editValue then return end
+    local list = {}
+    for idx, s in ipairs(CFG.storage_block_list) do
+        local dInfo = (s.door and s.door ~= "") and (" [Door: " .. s.door .. "]") or ""
+        table.insert(list, {
+            string.format("%d. %s%s", idx, s.name, dInfo),
+            string.format("Gudang Block (%s)", getItemNameSafe(CFG.block_id))
+        })
+    end
+    if #list == 0 then table.insert(list, { "Belum ada gudang block", "Tambahkan world block di form di atas" }) end
+    pcall(editValue, "as_block_display_list", jsonEncode(list))
 end
 
 updateLogDisplayList = function()
@@ -499,11 +519,9 @@ end
 local function saveWorldsToFile()
     local path, dir, fn = resolveFilePath(CFG.world_file_name, "boren_soil_worlds.txt")
     local fh = io.open(path, "w")
+    if not fh then fh = io.open("/sdcard/Download/" .. fn, "w") end
     if not fh then
-        fh = io.open("/sdcard/Download/" .. fn, "w")
-    end
-    if not fh then
-        addLog("`4[Gagal Simpan] `oTidak dapat membuka file download.")
+        addLog("`4[Gagal Simpan] `oTidak dapat membuka file world put.")
         return false
     end
 
@@ -513,17 +531,15 @@ local function saveWorldsToFile()
         fh:write(w.name .. d .. s .. "\n")
     end
     fh:close()
-    addLog(string.format("`2[Berhasil Simpan] `w%d world ke %s", #CFG.farm_world_list, path))
-    notifyUser(string.format("Berhasil simpan %d world", #CFG.farm_world_list))
+    addLog(string.format("`2[Berhasil Simpan] `w%d world put ke %s", #CFG.farm_world_list, path))
+    notifyUser(string.format("Berhasil simpan %d world put", #CFG.farm_world_list))
     return true
 end
 
 local function loadWorldsFromFile()
     local path, dir, fn = resolveFilePath(CFG.world_file_name, "boren_soil_worlds.txt")
     local fh = io.open(path, "r")
-    if not fh then
-        fh = io.open("/sdcard/Download/" .. fn, "r")
-    end
+    if not fh then fh = io.open("/sdcard/Download/" .. fn, "r") end
     if not fh then
         addLog("`4[Gagal Muat] `oFile " .. fn .. " tidak ditemukan di Download.")
         return false
@@ -547,52 +563,48 @@ local function loadWorldsFromFile()
     end
     fh:close()
     savePrefs(CFG)
-    addLog(string.format("`2[Berhasil Muat] `w%d world dari %s", count, path))
-    notifyUser(string.format("Berhasil muat %d world", count))
+    addLog(string.format("`2[Berhasil Muat] `w%d world put dari %s", count, path))
+    notifyUser(string.format("Berhasil muat %d world put", count))
     updateWorldDisplayList()
     return true
 end
 
-local function saveStoragesToFile()
-    local path, dir, fn = resolveFilePath(CFG.storage_file_name, "boren_soil_storages.txt")
+local function saveToolsToFile()
+    local path, dir, fn = resolveFilePath(CFG.tool_file_name, "boren_soil_tools.txt")
     local fh = io.open(path, "w")
+    if not fh then fh = io.open("/sdcard/Download/" .. fn, "w") end
     if not fh then
-        fh = io.open("/sdcard/Download/" .. fn, "w")
-    end
-    if not fh then
-        addLog("`4[Gagal Simpan] `oTidak dapat membuka file storage.")
+        addLog("`4[Gagal Simpan] `oTidak dapat membuka file gudang alat.")
         return false
     end
 
-    for _, s in ipairs(CFG.storage_list) do
+    for _, s in ipairs(CFG.storage_tool_list) do
         local d = (s.door and s.door ~= "") and ("|" .. s.door) or ""
         fh:write(s.name .. d .. "\n")
     end
     fh:close()
-    addLog(string.format("`2[Berhasil Simpan] `w%d gudang ke %s", #CFG.storage_list, path))
-    notifyUser(string.format("Berhasil simpan %d gudang", #CFG.storage_list))
+    addLog(string.format("`2[Berhasil Simpan] `w%d gudang alat ke %s", #CFG.storage_tool_list, path))
+    notifyUser(string.format("Berhasil simpan %d gudang alat", #CFG.storage_tool_list))
     return true
 end
 
-local function loadStoragesFromFile()
-    local path, dir, fn = resolveFilePath(CFG.storage_file_name, "boren_soil_storages.txt")
+local function loadToolsFromFile()
+    local path, dir, fn = resolveFilePath(CFG.tool_file_name, "boren_soil_tools.txt")
     local fh = io.open(path, "r")
-    if not fh then
-        fh = io.open("/sdcard/Download/" .. fn, "r")
-    end
+    if not fh then fh = io.open("/sdcard/Download/" .. fn, "r") end
     if not fh then
         addLog("`4[Gagal Muat] `oFile " .. fn .. " tidak ditemukan di Download.")
         return false
     end
 
     local count = 0
-    CFG.storage_list = {}
+    CFG.storage_tool_list = {}
     for line in fh:lines() do
         local cleanLine = line:gsub("[\r\n]", ""):match("^%s*(.-)%s*$")
         if cleanLine ~= "" and not cleanLine:match("^#") then
             local sName, sDoor = cleanLine:match("^([^|]+)|?([^|]*)$")
             if sName and sName ~= "" then
-                table.insert(CFG.storage_list, {
+                table.insert(CFG.storage_tool_list, {
                     name = sName:upper(),
                     door = (sDoor or ""):upper()
                 })
@@ -602,40 +614,98 @@ local function loadStoragesFromFile()
     end
     fh:close()
     savePrefs(CFG)
-    addLog(string.format("`2[Berhasil Muat] `w%d gudang dari %s", count, path))
-    notifyUser(string.format("Berhasil muat %d gudang", count))
-    updateStorageDisplayList()
+    addLog(string.format("`2[Berhasil Muat] `w%d gudang alat dari %s", count, path))
+    notifyUser(string.format("Berhasil muat %d gudang alat", count))
+    updateToolDisplayList()
+    return true
+end
+
+local function saveBlocksToFile()
+    local path, dir, fn = resolveFilePath(CFG.block_file_name, "boren_soil_blocks.txt")
+    local fh = io.open(path, "w")
+    if not fh then fh = io.open("/sdcard/Download/" .. fn, "w") end
+    if not fh then
+        addLog("`4[Gagal Simpan] `oTidak dapat membuka file gudang block.")
+        return false
+    end
+
+    for _, s in ipairs(CFG.storage_block_list) do
+        local d = (s.door and s.door ~= "") and ("|" .. s.door) or ""
+        fh:write(s.name .. d .. "\n")
+    end
+    fh:close()
+    addLog(string.format("`2[Berhasil Simpan] `w%d gudang block ke %s", #CFG.storage_block_list, path))
+    notifyUser(string.format("Berhasil simpan %d gudang block", #CFG.storage_block_list))
+    return true
+end
+
+local function loadBlocksFromFile()
+    local path, dir, fn = resolveFilePath(CFG.block_file_name, "boren_soil_blocks.txt")
+    local fh = io.open(path, "r")
+    if not fh then fh = io.open("/sdcard/Download/" .. fn, "r") end
+    if not fh then
+        addLog("`4[Gagal Muat] `oFile " .. fn .. " tidak ditemukan di Download.")
+        return false
+    end
+
+    local count = 0
+    CFG.storage_block_list = {}
+    for line in fh:lines() do
+        local cleanLine = line:gsub("[\r\n]", ""):match("^%s*(.-)%s*$")
+        if cleanLine ~= "" and not cleanLine:match("^#") then
+            local sName, sDoor = cleanLine:match("^([^|]+)|?([^|]*)$")
+            if sName and sName ~= "" then
+                table.insert(CFG.storage_block_list, {
+                    name = sName:upper(),
+                    door = (sDoor or ""):upper()
+                })
+                count = count + 1
+            end
+        end
+    end
+    fh:close()
+    savePrefs(CFG)
+    addLog(string.format("`2[Berhasil Muat] `w%d gudang block dari %s", count, path))
+    notifyUser(string.format("Berhasil muat %d gudang block", count))
+    updateBlockDisplayList()
     return true
 end
 
 -- ============================================================================
--- 6. INVENTORY & BOT HELPERS
+-- 6. GROWLAUNCHER CHEATS & ACTION HELPERS
 -- ============================================================================
-local function getInvCount(itemID)
-    itemID = tonumber(itemID) or 0
-    if itemID <= 0 then return 0 end
-    local inv = (getInventory and getInventory()) or (getBot and getBot().getInventory and getBot():getInventory())
-    if not inv then return 0 end
+local function applyCheatToggles()
+    if not editToggle then return end
+    pcall(editToggle, "ModFly", CFG.use_modfly == true)
+    pcall(editToggle, "Mod Fly", CFG.use_modfly == true)
+    pcall(editToggle, "Anti Lava", CFG.use_anti_lava == true)
+    pcall(editToggle, "Anti-Lava", CFG.use_anti_lava == true)
+    pcall(editToggle, "Anti Spike", true)
+    pcall(editToggle, "Anti-Spike", true)
+end
 
-    if inv.findItem then
-        local ok, cnt = pcall(inv.findItem, inv, itemID)
-        if ok and cnt then return cnt end
+local function safeSleep(ms)
+    ms = tonumber(ms) or 100
+    if Sleep then
+        Sleep(ms)
+    elseif sleep then
+        sleep(ms)
+    else
+        local start = os.clock()
+        while (os.clock() - start) * 1000 < ms do end
     end
-    if inv.getItemCount then
-        local ok, cnt = pcall(inv.getItemCount, inv, itemID)
-        if ok and cnt then return cnt end
+end
+
+local function waitIfPaused()
+    while STATE.paused and STATE.running do
+        safeSleep(300)
     end
-    if inv.items then
-        for _, it in pairs(inv.items) do
-            if it.id == itemID then return it.count or 0 end
-        end
-    end
-    return 0
+    return STATE.running
 end
 
 local function getPlayerPos()
     local p = (getLocal and getLocal()) or (getBot and getBot())
-    if not p then return 0, 0 end
+    if not p then return 50, 23 end
     local px = p.posX or (p.pos and p.pos.x) or (p.x and p.x * 32) or 0
     local py = p.posY or (p.pos and p.pos.y) or (p.y and p.y * 32) or 0
     return math.floor(px / 32), math.floor(py / 32)
@@ -707,141 +777,98 @@ local function wrenchTile(tx, ty)
 end
 
 -- ============================================================================
--- 7. MOVEMENT & PATHFINDING
+-- 7. MOVEMENT & SAFE PATHFINDING
 -- ============================================================================
-local function applyCheatToggles()
-    if not editToggle then return end
-    if CFG.use_modfly then
-        pcall(editToggle, "ModFly", true)
-    end
-    if CFG.use_anti_lava then
-        pcall(editToggle, "Anti Lava", true)
-        pcall(editToggle, "No Lava", true)
-    end
-end
-
-local function isTileSafe(tx, ty)
+local function isTileSafeToStand(tx, ty)
     if tx < 0 or tx > 99 or ty < 0 or ty > 59 then return false end
     local ok, t = pcall(getTile, tx, ty)
-    if not ok or not t then return false end
-    if t.fg == 4 or t.fg == 8 then return false end -- Lava / Bedrock
+    if not ok or not t then return true end
+    if t.fg == 8 or t.fg == 6 or t.fg == 10 then return false end
     return true
 end
 
-local function isTileSafeToStand(tx, ty)
-    if tx < 0 or tx > 99 or ty < 0 or ty > 53 then return false end
-    local ok, t = pcall(getTile, tx, ty)
-    if not ok or not t then return true end
-    local fg = t.fg or 0
-    if fg == 4 or fg == 8 or fg == 2 or fg == 10 or fg == 100 or fg == 8772 then
-        return false
+local function nearestFree(cx, cy)
+    if isTileSafeToStand(cx, cy) then return cx, cy end
+    local ring = { {0,-1}, {0,1}, {-1,0}, {1,0}, {-1,-1}, {1,-1}, {-1,1}, {1,1} }
+    for _, d in ipairs(ring) do
+        local nx, ny = cx + d[1], cy + d[2]
+        if isTileSafeToStand(nx, ny) then return nx, ny end
     end
-    if t.collidable then
-        return false
-    end
-    if CFG.use_anti_lava and ty < 53 then
-        local okB, below = pcall(getTile, tx, ty + 1)
-        if okB and below and below.fg == 4 then
-            return false
-        end
-    end
-    return true
+    return cx, cy
 end
 
 local function moveSafeTo(tx, ty)
     tx = math.max(0, math.min(99, tx))
-    ty = math.max(0, math.min(53, ty))
-    local curX, curY = getPlayerPos()
-    if curX == tx and curY == ty then return true end
+    ty = math.max(0, math.min(59, ty))
 
-    local pFn = FindPath or findPath or (getBot and getBot().findPath)
-    if not pFn then return false end
+    local sx, sy = getPlayerPos()
+    if sx == tx and sy == ty then return true end
 
-    applyCheatToggles()
+    local walkDelay = math.max(50, tonumber(CFG.delay_walk) or 150)
 
-    local function nearestFree(cx, cy)
-        for r = 0, 3 do
-            for oy = -r, r do
-                for ox = -r, r do
-                    if math.max(math.abs(ox), math.abs(oy)) == r and isTileSafeToStand(cx + ox, cy + oy) then
-                        return cx + ox, cy + oy
-                    end
-                end
+    if CFG.use_modfly then
+        local steps = math.max(math.abs(tx - sx), math.abs(ty - sy))
+        if steps == 0 then return true end
+        for s = 1, steps do
+            if not waitIfPaused() then return false end
+            local cx = math.floor(sx + (tx - sx) * (s / steps))
+            local cy = math.floor(sy + (ty - sy) * (s / steps))
+            local okP, p = pcall(getLocal)
+            if okP and p and sendPacketRaw then
+                pcall(sendPacketRaw, false, {
+                    type  = 0,
+                    x     = cx * 32,
+                    y     = cy * 32,
+                    state = (tx >= sx) and 32 or 48,
+                })
+            elseif getBot and getBot().findPath then
+                pcall(getBot().findPath, getBot(), cx, cy)
             end
+            safeSleep(math.floor(walkDelay * 0.7))
         end
-        return cx, cy
+        return true
     end
 
-    local CHUNK_LIMIT = 5
-    local stuck = 0
-    while STATE.running and not STATE.paused do
-        curX, curY = getPlayerPos()
-        if not curX or not curY then
-            safeSleep(100)
-            break
+    if FindPath or (getBot and getBot().findPath) then
+        local wtx, wty = nearestFree(tx, ty)
+        local okF = false
+        if FindPath then
+            okF = pcall(FindPath, wtx, wty)
+        elseif getBot and getBot().findPath then
+            okF = pcall(getBot().findPath, getBot(), wtx, wty)
         end
-        if curX == tx and curY == ty then return true end
-
-        local dx = tx - curX
-        local dy = ty - curY
-        local dist = math.max(math.abs(dx), math.abs(dy))
-        if dist == 0 then return true end
-
-        local stepX, stepY = tx, ty
-        local direct = (dist <= CHUNK_LIMIT) or stuck >= 1
-        if not direct then
-            local ratio = CHUNK_LIMIT / dist
-            local ix = math.max(0, math.min(99, math.floor(curX + (dx * ratio) + 0.5)))
-            local iy = math.max(0, math.min(53, math.floor(curY + (dy * ratio) + 0.5)))
-            stepX, stepY = nearestFree(ix, iy)
-            if not stepX then stepX, stepY, direct = tx, ty, true end
-        end
-
-        local walkDelay = math.max(60, CFG.delay_walk)
-        safeSleep(math.floor(walkDelay * (0.85 + math.random() * 0.3)))
-        if not STATE.running then break end
-
-        if getBot and getBot().findPath then
-            pcall(getBot().findPath, getBot(), stepX, stepY)
-        else
-            pcall(pFn, stepX, stepY)
-        end
-
-        local waited = 0
-        local stepDist = math.max(math.abs(curX - stepX), math.abs(curY - stepY))
-        local maxWait = math.max(120, math.min(1500, stepDist * 60))
-        while waited < maxWait and STATE.running do
-            local nx, ny = getPlayerPos()
-            if nx and ny and math.abs(nx - stepX) <= 1 and math.abs(ny - stepY) <= 1 then break end
-            safeSleep(25)
-            waited = waited + 25
-        end
-
-        local npx, npy = getPlayerPos()
-        if npx == tx and npy == ty then return true end
-        if npx == curX and npy == curY then
-            stuck = stuck + 1
-            if stuck >= 2 then
-                local okP, p = pcall(getLocal)
-                if okP and p and sendPacketRaw then
-                    pcall(sendPacketRaw, false, { type = 0, x = tx * 32, y = ty * 32 })
-                end
-                if stuck >= 3 then break end
-            end
-        else
-            stuck = 0
-            if direct and npx and npy and math.abs(npx - tx) <= 1 and math.abs(npy - ty) <= 1 then
-                break
+        if okF then
+            local waitWalk = 0
+            while waitWalk < 4000 and STATE.running do
+                safeSleep(150)
+                waitWalk = waitWalk + 150
+                local nx, ny = getPlayerPos()
+                if nx == wtx and ny == wty then return true end
             end
         end
-        safeSleep(math.floor(walkDelay * (0.85 + math.random() * 0.3)))
     end
-    local fx, fy = getPlayerPos()
-    return (fx and fy and math.abs(fx - tx) <= 1 and math.abs(fy - ty) <= 1)
+
+    local steps = math.max(math.abs(tx - sx), math.abs(ty - sy))
+    for s = 1, steps do
+        if not waitIfPaused() then return false end
+        local cx = math.floor(sx + (tx - sx) * (s / steps))
+        local cy = math.floor(sy + (ty - sy) * (s / steps))
+        local okP, p = pcall(getLocal)
+        if okP and p and sendPacketRaw then
+            pcall(sendPacketRaw, false, {
+                type  = 0,
+                x     = cx * 32,
+                y     = cy * 32,
+                state = (tx >= sx) and 32 or 48,
+            })
+        end
+        safeSleep(walkDelay)
+    end
+    return true
 end
 
 -- ============================================================================
--- 8. TILE ACTIONS & VALIDATION
+-- 8. TILE BREAKING & PLACING ENGINE
 -- ============================================================================
 local function breakTileAt(tx, ty)
     if tx < 0 or tx > 99 or ty < 0 or ty > 59 then return false end
@@ -864,8 +891,7 @@ local function breakTileAt(tx, ty)
         safeSleep(CFG.delay_punch)
         attempts = attempts + 1
     end
-    ok, t = pcall(getTile, tx, ty)
-    return ok and t and (t.fg == 0 and t.bg == 0)
+    return false
 end
 
 local function placeTileAt(tx, ty, itemID)
@@ -884,40 +910,66 @@ local function placeTileAt(tx, ty, itemID)
         if not ok or not t or t.fg == itemID then return true end
 
         local px, py = getPlayerPos()
-        local dist = math.max(math.abs(px - tx), math.abs(py - ty))
-        if dist > 2 or (px == tx and py == ty) then
-            if isTileSafe(tx - 1, ty) then
-                moveSafeTo(tx - 1, ty)
-            elseif isTileSafe(tx + 1, ty) then
-                moveSafeTo(tx + 1, ty)
-            elseif isTileSafe(tx, ty - 1) then
-                moveSafeTo(tx, ty - 1)
-            else
-                moveSafeTo(tx, ty + 1)
-            end
+        if math.abs(px - tx) > 2 or math.abs(py - ty) > 2 then
+            moveSafeTo(tx, ty - 1)
         end
 
         sendRawAction(tx, ty, itemID)
-        local d = math.floor(CFG.delay_place * (0.85 + math.random() * 0.3))
-        safeSleep(d)
+        safeSleep(CFG.delay_place)
         attempts = attempts + 1
     end
-
-    ok, t = pcall(getTile, tx, ty)
-    return ok and t and (t.fg == itemID)
+    return false
 end
 
 -- ============================================================================
--- 9. LOCK & ACCESS PROTECTION ENGINE
+-- 9. WHITE DOOR & LOCK ENCLOSURE ENGINE
 -- ============================================================================
+local function findWhiteDoor()
+    local attempts = 0
+    while STATE.running and attempts < 15 do
+        if getTiles then
+            local ok, tiles = pcall(getTiles)
+            if ok and tiles then
+                for _, t in pairs(tiles) do
+                    if t and t.fg == ITEM.MAIN_DOOR then
+                        return t.x, t.y
+                    end
+                end
+            end
+        end
+        for y = 0, 59 do
+            for x = 0, 99 do
+                local ok, t = pcall(getTile, x, y)
+                if ok and t and t.fg == ITEM.MAIN_DOOR then
+                    return x, y
+                end
+            end
+        end
+        safeSleep(250)
+        attempts = attempts + 1
+    end
+    -- Fallback ke posisi player jika tile belum terload sempurna
+    local px, py = getPlayerPos()
+    if px and py then return px, py end
+    return 50, 23
+end
+
+local function isOnMainDoor()
+    local px, py = getPlayerPos()
+    local dx, dy = findWhiteDoor()
+    if px and dx and px == dx and py == dy then
+        return true
+    end
+    return false
+end
+
 local function getMissingLockMaterials()
     local missing = {}
     local needed = {
-        { id = CFG.lock_id_wl, name = "World Lock", count = 1 },
-        { id = CFG.lock_id_sl, name = "Small Lock", count = 1 },
+        { id = CFG.lock_id_wl,     name = "World Lock",    count = 1 },
+        { id = CFG.lock_id_sl,     name = "Small Lock",    count = 1 },
         { id = CFG.lock_id_jammer, name = "Signal Jammer", count = 1 },
-        { id = CFG.lock_id_blocker, name = "Blocker Door", count = 1 },
-        { id = CFG.lock_id_door, name = "Wooden Door", count = 1 },
+        { id = CFG.lock_id_door,   name = "Wooden Door",   count = 1 },
     }
     for _, item in ipairs(needed) do
         local inInv = getInvCount(item.id)
@@ -928,26 +980,29 @@ local function getMissingLockMaterials()
     return missing
 end
 
+-- Forward declaration of warpToWorld
+local warpToWorld
+
 local function restockLockMaterialsFromStorage(missing)
-    if #CFG.storage_list == 0 then
+    if #CFG.storage_tool_list == 0 then
         local names = {}
         for _, m in ipairs(missing) do
             table.insert(names, string.format("%s (ID %d)", m.name, m.id))
         end
-        local warnStr = "Bahan proteksi tidak ada di tas & daftar gudang kosong: " .. table.concat(names, ", ")
-        addLog("`4[Peringatan Bahan] `o" .. warnStr)
+        local warnStr = "Bahan proteksi tidak ada di tas & Gudang Alat kosong: " .. table.concat(names, ", ")
+        addLog("`4[Peringatan Alat] `o" .. warnStr)
         notifyUser(warnStr)
         return false
     end
 
     local currentFarm = STATE.current_world
     local currentFarmDoor = STATE.current_door
-    addLog("`9[Proteksi Gudang] `0Bahan proteksi kurang di tas. Mencari ke gudang...")
+    addLog("`9[Gudang Alat] `0Bahan proteksi kurang di tas. Mengambil ke Gudang Alat...")
 
-    for _, stor in ipairs(CFG.storage_list) do
+    for _, stor in ipairs(CFG.storage_tool_list) do
         if not STATE.running or STATE.paused then break end
         if stor.name and stor.name ~= "" then
-            addLog(string.format("`9[Cek Gudang] `0Mengecek bahan proteksi di %s...", stor.name))
+            addLog(string.format("`9[Cek Alat] `0Mengecek bahan proteksi di %s...", stor.name))
             if warpToWorld(stor.name, stor.door) then
                 safeSleep(1500)
                 local objs = nil
@@ -983,8 +1038,8 @@ local function restockLockMaterialsFromStorage(missing)
         end
     end
 
-    -- Kembali ke farm world
-    if currentFarm ~= "" then
+    -- Kembali ke farm world jika sebelumnya berada di farm
+    if currentFarm ~= "" and currentFarm ~= "EXIT" then
         warpToWorld(currentFarm, currentFarmDoor)
         safeSleep(1200)
     end
@@ -996,13 +1051,13 @@ local function restockLockMaterialsFromStorage(missing)
         for _, m in ipairs(stillMissing) do
             table.insert(names, string.format("%s (ID %d)", m.name, m.id))
         end
-        local warnStr = "Bahan proteksi tidak lengkap di tas/gudang: " .. table.concat(names, ", ")
-        addLog("`4[Peringatan Bahan] `o" .. warnStr)
+        local warnStr = "Bahan proteksi belum lengkap di tas/gudang alat: " .. table.concat(names, ", ")
+        addLog("`4[Peringatan Alat] `o" .. warnStr)
         notifyUser(warnStr)
         return false
     end
 
-    addLog("`2[Proteksi Gudang] `wSeluruh bahan proteksi berhasil diambil dari gudang!")
+    addLog("`2[Gudang Alat] `wSeluruh bahan proteksi berhasil diambil dari gudang alat!")
     return true
 end
 
@@ -1016,18 +1071,7 @@ local function buildLockEnclosure()
     addLog("`9[Proteksi Kunci] `0Memeriksa posisi White Door dan ketersediaan bahan...")
 
     -- 2. Cek posisi White Door
-    local doorX, doorY = nil, nil
-    for y = 0, 59 do
-        for x = 0, 99 do
-            local ok, t = pcall(getTile, x, y)
-            if ok and t and t.fg == 6 then
-                doorX, doorY = x, y
-                break
-            end
-        end
-        if doorX then break end
-    end
-
+    local doorX, doorY = findWhiteDoor()
     if not doorX or not doorY then
         addLog("`4[Proteksi Gagal] `oWhite Door tidak ditemukan di world ini!")
         notifyUser("Peringatan: White Door tidak ditemukan!")
@@ -1037,24 +1081,29 @@ local function buildLockEnclosure()
 
     -- Tentukan orientasi horizontal (kiri pintu jika doorX >= 2, kanan jika < 2)
     local dirX = (doorX >= 2) and -1 or 1
-    local pJammer  = { x = doorX + (1 * dirX), y = doorY }
-    local pBlocker = { x = doorX,              y = doorY - 1 }
-    local pSL      = { x = doorX + (1 * dirX), y = doorY - 1 }
-    local pDoor    = { x = doorX + (2 * dirX), y = doorY - 1 }
-    local pWL      = { x = doorX + (2 * dirX), y = doorY }
+    local pJammer = { x = doorX + (1 * dirX), y = doorY }
+    local pSL     = { x = doorX + (1 * dirX), y = doorY - 1 }
+    local pWL     = { x = doorX + (2 * dirX), y = doorY }
+    local pSky    = { x = doorX + (2 * dirX), y = doorY - 1 } -- Langit kosong di atas WL
 
-    -- 3. Cek apakah formasi kunci sudah pernah terpasang lengkap
+    -- 3. Cek apakah formasi kunci & Door ID di (0, 0) sudah pernah terpasang lengkap
     local okWl, tWl = pcall(getTile, pWL.x, pWL.y)
     local okSl, tSl = pcall(getTile, pSL.x, pSL.y)
-    if okWl and tWl and tWl.fg == CFG.lock_id_wl and okSl and tSl and tSl.fg == CFG.lock_id_sl then
-        addLog("`2[Proteksi Kunci] `wStruktur proteksi kunci sudah terpasang rapi!")
+    local okJm, tJm = pcall(getTile, pJammer.x, pJammer.y)
+    local okD0, tD0 = pcall(getTile, 0, 0)
+
+    if okWl and tWl and tWl.fg == CFG.lock_id_wl and
+       okSl and tSl and tSl.fg == CFG.lock_id_sl and
+       okJm and tJm and tJm.fg == CFG.lock_id_jammer and
+       okD0 and tD0 and tD0.fg == CFG.lock_id_door then
+        addLog("`2[Proteksi Kunci] `wStruktur proteksi kunci dan Door ID di (0,0) sudah terpasang rapi!")
         return true
     end
 
     -- 4. Validasi ketersediaan bahan yang diperlukan
     local missingMat = getMissingLockMaterials()
     if #missingMat > 0 then
-        addLog("`e[Bahan Kurang] `0Bahan proteksi belum lengkap di tas. Mencoba mengambil ke gudang...")
+        addLog("`e[Alat Kurang] `0Bahan proteksi belum lengkap di tas. Mencoba mengambil ke Gudang Alat...")
         local okRestock = restockLockMaterialsFromStorage(missingMat)
         if not okRestock then
             addLog("`4[Peringatan Proteksi] `oPemasangan kunci dilewati karena bahan tidak tersedia.")
@@ -1064,7 +1113,7 @@ local function buildLockEnclosure()
     end
 
     -- 5. Bersihkan area petak formasi proteksi
-    local spotsToClear = { pBlocker, pJammer, pSL, pDoor, pWL }
+    local spotsToClear = { pJammer, pSL, pWL, pSky }
     for _, sp in ipairs(spotsToClear) do
         local ok, t = pcall(getTile, sp.x, sp.y)
         if ok and t and (t.fg ~= 0 and t.fg ~= 8 and t.fg ~= 6) then
@@ -1072,19 +1121,16 @@ local function buildLockEnclosure()
         end
     end
 
-    -- 6. Pasang Signal Jammer
+    -- 6. Pasang Signal Jammer di (doorX - 1, doorY) + Punch 1x agar aktif
     addLog("`9[Proteksi] `0Memasang Signal Jammer...")
-    if not placeTileAt(pJammer.x, pJammer.y, CFG.lock_id_jammer) then
-        addLog("`e[Proteksi] `0Peringatan: Gagal menaruh Signal Jammer.")
+    if placeTileAt(pJammer.x, pJammer.y, CFG.lock_id_jammer) then
+        safeSleep(300)
+        sendHitAction(pJammer.x, pJammer.y)
+        safeSleep(350)
+        addLog(string.format("`2[Proteksi] `wSignal Jammer aktif di (%d, %d)", pJammer.x, pJammer.y))
     end
 
-    -- 7. Pasang Blocker Door / Air Vent
-    addLog("`9[Proteksi] `0Memasang Blocker Door...")
-    if not placeTileAt(pBlocker.x, pBlocker.y, CFG.lock_id_blocker) then
-        addLog("`e[Proteksi] `0Peringatan: Gagal menaruh Blocker Door.")
-    end
-
-    -- 8. Pasang Small Lock & Recalc Lock
+    -- 7. Pasang Small Lock di (doorX - 1, doorY - 1) & Recalc Lock
     addLog("`9[Proteksi] `0Memasang Small Lock...")
     if placeTileAt(pSL.x, pSL.y, CFG.lock_id_sl) then
         safeSleep(300)
@@ -1096,20 +1142,7 @@ local function buildLockEnclosure()
         safeSleep(300)
     end
 
-    -- 9. Pasang Wooden Door & Setting Door ID
-    addLog("`9[Proteksi] `0Memasang Wooden Door...")
-    if placeTileAt(pDoor.x, pDoor.y, CFG.lock_id_door) then
-        safeSleep(300)
-        wrenchTile(pDoor.x, pDoor.y)
-        safeSleep(300)
-        local dID = (CFG.farm_door_id and CFG.farm_door_id ~= "") and CFG.farm_door_id or "BOREN"
-        if sendPacket then
-            pcall(sendPacket, 2, string.format("action|dialog_return\ndialog_name|door_edit\ntilex|%d|\ntiley|%d|\ndoor_name|\ndoor_target|\ndoor_id|%s\ncheckbox_locked|1", pDoor.x, pDoor.y, dID))
-        end
-        safeSleep(300)
-    end
-
-    -- 10. Pasang World Lock
+    -- 8. Pasang World Lock di (doorX - 2, doorY) & Set Public
     addLog("`9[Proteksi] `0Memasang World Lock...")
     if placeTileAt(pWL.x, pWL.y, CFG.lock_id_wl) then
         safeSleep(300)
@@ -1123,7 +1156,36 @@ local function buildLockEnclosure()
         end
     end
 
-    addLog("`2[Proteksi Selesai] `wStruktur proteksi kunci berhasil dipasang secara optimal!")
+    -- 9. Pasang Wooden Door di koordinat (0, 0) & Setting Door ID (seperti DF)
+    addLog("`9[Proteksi] `0Fly ke (0, 0) untuk memasang Door ID...")
+    if editToggle then pcall(editToggle, "ModFly", true) end
+    safeSleep(200)
+    moveSafeTo(1, 0)
+    safeSleep(350)
+
+    local ok0, t0 = pcall(getTile, 0, 0)
+    if ok0 and t0 and t0.fg ~= CFG.lock_id_door and t0.fg ~= 8 then
+        breakTileAt(0, 0)
+    end
+
+    if placeTileAt(0, 0, CFG.lock_id_door) then
+        safeSleep(300)
+        wrenchTile(0, 0)
+        safeSleep(300)
+        local dID = (CFG.farm_door_id and CFG.farm_door_id ~= "") and CFG.farm_door_id or "BOREN"
+        if sendPacket then
+            pcall(sendPacket, 2, string.format("action|dialog_return\ndialog_name|door_edit\ntilex|0|\ntiley|0|\ndoor_name|\ndoor_target|\ndoor_id|%s\ncheckbox_locked|1", dID))
+        end
+        safeSleep(300)
+        addLog(string.format("`2[Proteksi] `wDoor ID (%s) berhasil dipasang di (0, 0)", dID))
+    end
+
+    -- Kembali ke White Door
+    moveSafeTo(doorX, doorY)
+    safeSleep(300)
+    applyCheatToggles()
+
+    addLog("`2[Proteksi Selesai] `wStruktur proteksi kunci dan Door ID di (0, 0) berhasil dipasang optimal!")
     return true
 end
 
@@ -1149,71 +1211,58 @@ local function buildWaterColumn()
             placeTileAt(wx, wy, CFG.water_item_id)
         end
     end
-    addLog("`2[Elevator Air] `wPemasangan elevator air vertikal selesai.")
+    addLog("`2[Elevator Air] `wKolom elevator air berhasil dipasang!")
     return true
 end
 
 -- ============================================================================
--- 11. HORIZONTAL ROW PLACEMENT ENGINE
+-- 11. HORIZONTAL ROW SOIL PLACING ENGINE
 -- ============================================================================
-local function placeSoilRows(onNeedRestockCallback)
-    addLog(string.format("`9[Konstruksi] `0Memulai penempatan baris block (ID: %d - %s)...", CFG.block_id, getItemNameSafe(CFG.block_id)))
-    local rowIdx = 0
+local function placeSoilRows(restockCallback)
+    addLog(string.format("`9[Place Rows] `0Memulai penempatan %s (ID %d)...", getItemNameSafe(CFG.block_id), CFG.block_id))
 
-    applyCheatToggles()
-
+    local goingRight = true
     for y = CFG.row_start_y, CFG.row_end_y, CFG.row_step do
-        if not STATE.running or STATE.paused then break end
-        rowIdx = rowIdx + 1
+        if not STATE.running then break end
+        if not waitIfPaused() then break end
+
         STATE.active_row = y
+        updatePowerStatusList()
 
-        -- Bot terbang di koridor udara kosong persis di atas baris (y - 1)
-        local standY = (y - 1 >= 1) and (y - 1) or (y + 1)
-        applyCheatToggles()
-
-        local startX, endX, stepX
-        if rowIdx % 2 == 1 then
-            startX, endX, stepX = CFG.row_start_x, CFG.row_end_x, 1
-        else
-            startX, endX, stepX = CFG.row_end_x, CFG.row_start_x, -1
-        end
-
-        -- Pindah ke awal koridor baris
-        moveSafeTo(startX, standY)
+        local startX = goingRight and CFG.row_start_x or CFG.row_end_x
+        local endX   = goingRight and CFG.row_end_x or CFG.row_start_x
+        local stepX  = goingRight and 1 or -1
+        goingRight = not goingRight
 
         local x = startX
         while (stepX > 0 and x <= endX) or (stepX < 0 and x >= endX) do
-            if not STATE.running or STATE.paused then break end
+            if not STATE.running then break end
+            if not waitIfPaused() then break end
+
             STATE.active_col = x
 
             local ok, t = pcall(getTile, x, y)
             if ok and t and t.fg ~= CFG.block_id and t.fg ~= 8 and t.fg ~= 6 then
-                local curCount = getInvCount(CFG.block_id)
-                if curCount < CFG.restock_threshold then
-                    addLog(string.format("`e[Restock Diperlukan] `0Sisa block di tas (%d) < batas (%d). Menuju gudang...", curCount, CFG.restock_threshold))
-                    if onNeedRestockCallback then
-                        local okRestock = onNeedRestockCallback(x, standY)
+                if getInvCount(CFG.block_id) <= 0 then
+                    addLog(string.format("`e[Stok Habis] `0Block di tas habis pada (%d, %d). Memanggil restock...", x, y))
+                    if restockCallback then
+                        local okRestock = restockCallback(x, y)
                         if not okRestock then
-                            addLog("`4[Restock Gagal] `oGagal mengambil block dari gudang. Berhenti.")
+                            addLog("`4[Konstruksi Terhenti] `oGagal restock block dari gudang.")
                             return false
                         end
-                        applyCheatToggles()
-                        moveSafeTo(x, standY)
+                    else
+                        addLog("`4[Konstruksi Terhenti] `oTidak ada fungsi restock.")
+                        return false
                     end
                 end
 
-                local px, py = getPlayerPos()
-                if math.abs(px - x) > 1 or py ~= standY then
-                    moveSafeTo(x, standY)
-                end
-
-                sendRawAction(x, y, CFG.block_id)
-                local d = math.floor(CFG.delay_place * (0.85 + math.random() * 0.3))
-                safeSleep(d)
-
-                STATE.total_placed_blocks = STATE.total_placed_blocks + 1
-                if STATE.total_placed_blocks % 50 == 0 then
-                    updatePowerStatusList()
+                local placed = placeTileAt(x, y, CFG.block_id)
+                if placed then
+                    STATE.total_placed_blocks = STATE.total_placed_blocks + 1
+                    if STATE.total_placed_blocks % 50 == 0 then
+                        updatePowerStatusList()
+                    end
                 end
             end
 
@@ -1242,53 +1291,62 @@ local function generateRandomWorldName(letterCount, withNum, prefix)
     return res:upper()
 end
 
-local function warpToWorld(worldName, doorID)
-    worldName = (worldName or ""):upper()
-    doorID = (doorID or ""):upper()
-    if worldName == "" then return false end
+warpToWorld = function(worldName, doorID)
+    if not worldName or worldName == "" then return false end
+    worldName = worldName:upper():gsub("%s+", "")
+    doorID = (doorID or ""):gsub("%s+", "")
 
-    addLog(string.format("`9[Warp] `0Menuju world: %s %s...", worldName, (doorID ~= "" and ("|" .. doorID) or "")))
-    local warpStr = (doorID ~= "") and (worldName .. "|" .. doorID) or worldName
+    local targetStr = (doorID ~= "") and (worldName .. "|" .. doorID) or worldName
+    addLog(string.format("`9[Warp] `0Menuju world: %s...", targetStr))
 
-    local attempts = 0
-    while STATE.running and attempts < 10 do
-        if sendPacket then
-            pcall(sendPacket, 3, string.format("action|join_request\nname|%s\ninvitedWorld|0", warpStr))
-        elseif getBot and getBot().warp then
-            pcall(getBot().warp, getBot(), warpStr)
-        end
-
-        local waited = 0
-        while waited < 4500 and STATE.running do
-            safeSleep(200)
-            waited = waited + 200
-            local curW = ""
-            if getWorld then
-                local w = getWorld()
-                curW = (w and w.name) or ""
-            elseif getBot and getBot().getWorld then
-                local w = getBot():getWorld()
-                curW = (w and w.name) or ""
+    local tries = 0
+    while STATE.running and tries < 8 do
+        local cur = getWorldNameSafe()
+        if cur ~= worldName then
+            if sendPacket then
+                pcall(sendPacket, 3, "action|join_request\nname|" .. targetStr .. "\ninvitedWorld|0\n")
+            elseif getBot and getBot().warp then
+                pcall(getBot().warp, getBot(), targetStr)
             end
-            if curW:upper() == worldName then
-                safeSleep(1000)
+            safeSleep(3200)
+        else
+            -- Sudah berada di world target
+            if doorID ~= "" and isOnMainDoor() then
+                if sendPacket then
+                    pcall(sendPacket, 3, "action|join_request\nname|" .. worldName .. "|" .. doorID .. "\ninvitedWorld|0\n")
+                elseif getBot and getBot().warp then
+                    pcall(getBot().warp, getBot(), worldName .. "|" .. doorID)
+                end
+                safeSleep(1500)
+            end
+            if getWorldNameSafe() == worldName then
+                STATE.current_world = worldName
                 applyCheatToggles()
                 return true
             end
         end
-        attempts = attempts + 1
+        tries = tries + 1
     end
-    return false
+
+    local finalW = getWorldNameSafe()
+    STATE.current_world = finalW
+    applyCheatToggles()
+    return finalW == worldName
 end
 
 local function isWorldCleanAndUnowned()
     local tiles = nil
     if getWorld then
         local w = getWorld()
-        tiles = w and w.tiles
+        tiles = (type(w) == "table") and w.tiles or nil
     elseif getBot and getBot().getWorld then
         local w = getBot():getWorld()
         tiles = w and w.getTiles and w:getTiles()
+    end
+
+    if not tiles and getTiles then
+        local ok, res = pcall(getTiles)
+        if ok and res then tiles = res end
     end
 
     if not tiles then return false end
@@ -1348,30 +1406,31 @@ local function recordBlastedWorld(worldName, doorID)
 end
 
 -- ============================================================================
--- 13. MULTI-STORAGE RESTOCK ENGINE
+-- 13. MULTI-STORAGE BLOCK RESTOCK ENGINE
 -- ============================================================================
-local function restockFromStorage(resumeX, resumeY)
-    if #CFG.storage_list == 0 then
-        addLog("`4[Restock Gagal] `oDaftar gudang storage kosong! Tambahkan gudang di Tab 3.")
+local function restockBlocksFromStorage(resumeX, resumeY)
+    if #CFG.storage_block_list == 0 then
+        addLog("`4[Restock Gagal] `oDaftar Gudang Block kosong! Tambahkan gudang di Tab 4.")
         return false
     end
 
     local currentFarm = STATE.current_world
     local currentFarmDoor = STATE.current_door
 
-    for sIdx, stor in ipairs(CFG.storage_list) do
+    for sIdx, stor in ipairs(CFG.storage_block_list) do
         if not STATE.running then break end
-        addLog(string.format("`9[Gudang] `0Menuju gudang %d/%d: %s...", sIdx, #CFG.storage_list, stor.name))
+        addLog(string.format("`9[Gudang Block] `0Menuju gudang %d/%d: %s...", sIdx, #CFG.storage_block_list, stor.name))
         if warpToWorld(stor.name, stor.door) then
             safeSleep(1500)
 
             local objs = (getObjects and getObjects()) or (getBot and getBot().getWorld and getBot():getWorld().getObjects and getBot():getWorld():getObjects())
             if objs then
                 for _, obj in pairs(objs) do
-                    if obj.id == CFG.block_id then
+                    local oId = obj.id or obj.item or 0
+                    if oId == CFG.block_id then
                         local ox = math.floor((obj.posX or obj.x or 0) / 32)
                         local oy = math.floor((obj.posY or obj.y or 0) / 32)
-                        addLog(string.format("`2[Gudang] `wDitemukan floating block di (%d, %d). Mengambil...", ox, oy))
+                        addLog(string.format("`2[Gudang Block] `wDitemukan floating block di (%d, %d). Mengambil...", ox, oy))
                         moveSafeTo(ox, oy)
                         safeSleep(500)
                         if collect then pcall(collect, 2, 200) end
@@ -1383,44 +1442,50 @@ local function restockFromStorage(resumeX, resumeY)
                 end
             end
 
-            if CFG.enable_lock_enclosure then
-                local secItems = { CFG.lock_id_wl, CFG.lock_id_sl, CFG.lock_id_jammer, CFG.lock_id_blocker, CFG.lock_id_door }
-                for _, sId in ipairs(secItems) do
-                    if getInvCount(sId) == 0 and objs then
-                        for _, obj in pairs(objs) do
-                            if obj.id == sId then
-                                local ox = math.floor((obj.posX or obj.x or 0) / 32)
-                                local oy = math.floor((obj.posY or obj.y or 0) / 32)
-                                moveSafeTo(ox, oy)
-                                safeSleep(500)
-                                if collect then pcall(collect, 2, 10) end
-                                safeSleep(500)
-                                break
-                            end
-                        end
-                    end
-                end
-            end
-
             if getInvCount(CFG.block_id) >= CFG.restock_threshold then
-                addLog(string.format("`2[Gudang Sukses] `wBerhasil restock %d block. Kembali ke %s...", getInvCount(CFG.block_id), currentFarm))
-                warpToWorld(currentFarm, currentFarmDoor)
-                safeSleep(1200)
-                if resumeX and resumeY then
-                    moveSafeTo(resumeX, resumeY)
+                addLog(string.format("`2[Restock Sukses] `wBerhasil restock %d block. Kembali ke %s...", getInvCount(CFG.block_id), currentFarm))
+                if currentFarm ~= "" and currentFarm ~= "EXIT" then
+                    warpToWorld(currentFarm, currentFarmDoor)
+                    safeSleep(1200)
+                    if resumeX and resumeY then
+                        moveSafeTo(resumeX, resumeY)
+                    end
                 end
                 return true
             end
         end
     end
 
-    addLog("`4[Gudang Gagal] `oSemua gudang sudah dicek namun block tidak cukup.")
+    addLog("`4[Gudang Block Gagal] `oSemua gudang block sudah dicek namun block tidak cukup.")
     return false
 end
 
 -- ============================================================================
--- 14. MAIN PROCESS DISPATCHER
+-- 14. PRE-FLIGHT PREPARATION & MAIN PROCESS DISPATCHER
 -- ============================================================================
+local function ensurePreparedForFarm()
+    -- 1. Cek Kebutuhan Alat & Kunci
+    if CFG.enable_lock_enclosure then
+        local missingTools = getMissingLockMaterials()
+        if #missingTools > 0 then
+            addLog("`9[Persiapan Alat] `0Bahan proteksi belum lengkap di tas. Mengambil ke Gudang Alat...")
+            local okT = restockLockMaterialsFromStorage(missingTools)
+            if not okT then
+                addLog("`e[Peringatan Alat] `0Gagal mengambil alat proteksi dari gudang alat.")
+            end
+        end
+    end
+
+    -- 2. Cek Kebutuhan Block
+    if getInvCount(CFG.block_id) < CFG.restock_threshold then
+        addLog(string.format("`9[Persiapan Block] `0Block di tas kurang (%d < %d). Mengambil ke Gudang Block...", getInvCount(CFG.block_id), CFG.restock_threshold))
+        local okB = restockBlocksFromStorage()
+        if not okB then
+            addLog("`e[Peringatan Block] `0Gagal mengambil block dari gudang block.")
+        end
+    end
+end
+
 local function runSingleFarmWorld(worldName, doorID)
     STATE.current_world = worldName
     STATE.current_door = doorID or ""
@@ -1428,6 +1493,9 @@ local function runSingleFarmWorld(worldName, doorID)
     updatePowerStatusList()
     addLog(string.format("`2========================================`0"))
     addLog(string.format("`2[Mulai World] `wMemproses Farm World: %s", worldName))
+
+    -- Persiapan tas sebelum masuk ke world
+    ensurePreparedForFarm()
 
     if not warpToWorld(worldName, doorID) then
         addLog(string.format("`4[Gagal Warp] `oTidak dapat memasuki world %s", worldName))
@@ -1449,13 +1517,13 @@ local function runSingleFarmWorld(worldName, doorID)
     buildWaterColumn()
 
     local okRows = placeSoilRows(function(resX, resY)
-        return restockFromStorage(resX, resY)
+        return restockBlocksFromStorage(resX, resY)
     end)
 
     if okRows then
         STATE.total_worlds_completed = STATE.total_worlds_completed + 1
         addLog(string.format("`2[World Selesai] `w%s sukses dibangun 100%%!", worldName))
-        sendWebhookNotification("🌱 Farm World Selesai", string.format("World: **%s**\nTotal Block: **%d**\nTotal World Selesai: **%d**", worldName, STATE.total_placed_blocks, STATE.total_worlds_completed))
+        sendWebhookNotification("Farm World Selesai", string.format("World: **%s**\nTotal Block: **%d**\nTotal World Selesai: **%d**", worldName, STATE.total_placed_blocks, STATE.total_worlds_completed))
         updatePowerStatusList()
         return true
     end
@@ -1478,184 +1546,151 @@ local function autoSoilMainLoop()
                 found = found + 1
                 local foundEntry = false
                 for _, w in ipairs(CFG.farm_world_list) do
-                    if (w.name or ""):upper() == rndWorld:upper() then
-                        w.done = true
-                        foundEntry = true
-                        break
-                    end
+                    if w.name == rndWorld then foundEntry = true; break end
                 end
                 if not foundEntry then
                     table.insert(CFG.farm_world_list, { name = rndWorld, door = CFG.farm_door_id, done = true })
-                end
-                savePrefs(CFG)
-                saveWorldsToFile()
-                updateWorldDisplayList()
-            end
-            safeSleep(1500)
-        end
-    else
-        if #CFG.farm_world_list == 0 then
-            addLog("`4[Daftar Kosong] `oDaftar Farm World kosong! Tambahkan world di Tab 1 atau klik Muat dari Download.")
-            STATE.running = false
-            updatePowerStatusList()
-            return
-        end
-
-        for idx = STATE.current_world_index, #CFG.farm_world_list do
-            if not STATE.running then break end
-            local wEntry = CFG.farm_world_list[idx]
-            if not wEntry.done then
-                STATE.current_world_index = idx
-                local ok = runSingleFarmWorld(wEntry.name, wEntry.door)
-                if ok then
-                    wEntry.done = true
                     savePrefs(CFG)
                     saveWorldsToFile()
                     updateWorldDisplayList()
                 end
             end
-            safeSleep(2000)
+            safeSleep(1500)
+        end
+    else
+        addLog(string.format("`9[Mode Antrean] `0Memproses %d world dalam antrean...", #CFG.farm_world_list))
+        if #CFG.farm_world_list == 0 then
+            addLog("`4[Antrean Kosong] `oDaftar world kosong! Tambahkan world di Tab 1.")
+            STATE.running = false
+            updatePowerStatusList()
+            return
+        end
+
+        for idx, wItem in ipairs(CFG.farm_world_list) do
+            if not STATE.running then break end
+            if not wItem.done then
+                STATE.current_world_index = idx
+                local ok = runSingleFarmWorld(wItem.name, wItem.door)
+                if ok then
+                    wItem.done = true
+                    savePrefs(CFG)
+                    saveWorldsToFile()
+                    updateWorldDisplayList()
+                end
+                safeSleep(2000)
+            end
         end
     end
 
     STATE.running = false
     STATE.status_text = "SELESAI"
-    addLog("`2[Semua Selesai] `wSeluruh world telah berhasil diselesaikan!")
+    addLog("`2[Operasi Selesai] `wSeluruh rangkaian pembangunan farm selesai!")
     updatePowerStatusList()
     notifyUser("Auto Soil Builder Selesai!")
 end
 
 local function startSoilBot()
-    if STATE.running then return end
-    applyCheatToggles()
+    if STATE.running then
+        addLog("`e[Peringatan] `0Bot sudah dalam kondisi berjalan.")
+        return
+    end
     STATE.running = true
-    STATE.paused  = false
-    if editToggle then pcall(editToggle, "as_run_power", true) end
+    STATE.paused = false
+    STATE.status_text = "RUNNING"
     updatePowerStatusList()
 
-    local okCoro, errCoro = pcall(runCoroutine, function()
+    local okCoro = pcall(runCoroutine, function()
         autoSoilMainLoop()
     end)
     if not okCoro then
-        STATE.running = false
-        STATE.paused = false
-        if editToggle then pcall(editToggle, "as_run_power", false) end
-        addLog("`4[Error Coroutine] `o" .. tostring(errCoro))
-        updatePowerStatusList()
-        if sendNotification then pcall(sendNotification, "Gagal mulai bot: " .. tostring(errCoro)) end
+        local okTask = pcall(function()
+            if asyncTask then
+                asyncTask(autoSoilMainLoop)
+            else
+                local co = coroutine.create(autoSoilMainLoop)
+                coroutine.resume(co)
+            end
+        end)
+        if not okTask then
+            addLog("`4[Coroutine Error] `oGagal meluncurkan coroutine bot.")
+            STATE.running = false
+            updatePowerStatusList()
+        end
     end
 end
 
 local function stopSoilBot()
     STATE.running = false
     STATE.paused = false
-    if editToggle then pcall(editToggle, "as_run_power", false) end
-    addLog("`4[Berhenti] `0Bot dihentikan oleh user.")
+    STATE.status_text = "STOPPED"
+    addLog("`4[Bot Berhenti] `oInstruksi penghentian bot diterima.")
+    updatePowerStatusList()
+    notifyUser("Auto Soil Builder Dihentikan!")
+end
+
+local function togglePauseSoilBot()
+    if not STATE.running then return end
+    STATE.paused = not STATE.paused
+    STATE.status_text = STATE.paused and "PAUSED" or "RUNNING"
+    addLog(STATE.paused and "`e[Bot Dijeda] `0Operasi dihentikan sementara." or "`2[Bot Dilanjutkan] `wOperasi dilanjutkan kembali.")
     updatePowerStatusList()
 end
 
 -- ============================================================================
--- 15. UNIFIED DIALOG MANAGERS (WORLD FARM & GUDANG)
+-- 15. UNIFIED DIALOG MANAGERS & QUICK PASTE
 -- ============================================================================
 local openUnifiedWorldManager
-local openUnifiedStorageManager
+local openUnifiedToolManager
+local openUnifiedBlockManager
 local openEditWorldEntryDialog
-local openEditStorageEntryDialog
+local openEditToolEntryDialog
+local openEditBlockEntryDialog
 
 local function safeSendRawDialog(dText)
     if not dText or dText == "" then return false end
-    if growtopia and type(growtopia.sendDialog) == "function" then
-        local ok = pcall(growtopia.sendDialog, dText)
-        if ok then return true end
-    end
-    if sendVariant then
-        local ok1 = pcall(sendVariant, { v1 = "OnDialogRequest", v2 = dText })
-        if ok1 then return true end
-        local ok2 = pcall(sendVariant, { v0 = "OnDialogRequest", v1 = dText })
-        if ok2 then return true end
-    end
-    if sendDialog then
-        local ok = pcall(sendDialog, dText)
-        if ok then return true end
+    if sendRawDialog then
+        pcall(sendRawDialog, dText)
+        return true
+    elseif variant then
+        pcall(variant, { [0] = "OnDialogRequest", [1] = dText })
+        return true
+    elseif sendVariant then
+        pcall(sendVariant, { [0] = "OnDialogRequest", [1] = dText })
+        return true
     end
     return false
 end
 
-local function parseWorldEntryToken(token)
-    if not token or token == "" then return nil end
-    local w, d = token:match("^([^:]+):?(.*)$")
-    if not w or w == "" then
-        w, d = token:match("^([^|]+)|?(.*)$")
-    end
-    if not w or w == "" then w = token d = "" end
-    w = w:gsub("%s+", ""):upper()
-    d = (d or ""):gsub("^%s+", ""):gsub("%s+$", "")
-    if w == "" then return nil end
-    return { name = w, door = d, done = false }
-end
-
-local function parseAndValidateWorldBatch(rawText, replaceMode)
-    if type(rawText) ~= "string" or rawText == "" then
-        return 0, 0, 0, "Teks kosong! Silakan tempel daftar world terlebih dahulu."
-    end
-    local cleaned = rawText:gsub("[\"\'%[%]%(%)]", " "):gsub("\t", " ")
-    local tokens = {}
-    for part in cleaned:gmatch("[^\r\n;,]+") do
-        local trimmed = part:gsub("^%s+", ""):gsub("%s+$", "")
-        if trimmed ~= "" then table.insert(tokens, trimmed) end
-    end
-    if #tokens == 0 then
-        return 0, 0, 0, "Tidak ada data world yang valid ditemukan."
+local function parseAndValidateWorldBatch(rawText, isReplace)
+    if not rawText or rawText == "" then return 0, 0, 0, "Teks kosong!" end
+    local added, duplicates, ignored = 0, 0, 0
+    local existing = {}
+    if not isReplace then
+        for _, w in ipairs(CFG.farm_world_list) do
+            existing[(w.name or ""):upper()] = true
+        end
+    else
+        CFG.farm_world_list = {}
     end
 
-    local candidateList = {}
-    local seen = {}
-    local dups = 0
-    local ignored = 0
-
-    for _, token in ipairs(tokens) do
-        local parsed = parseWorldEntryToken(token)
-        if parsed and parsed.name ~= "" then
-            local validName = parsed.name:match("^([%w_]+)$")
-            if validName and #validName >= 1 and #validName <= 24 then
-                parsed.name = validName:upper()
-                if seen[parsed.name] then
-                    dups = dups + 1
+    for line in string.gmatch(rawText, "[^\r\n]+") do
+        local clean = line:gsub("^%s+", ""):gsub("%s+$", "")
+        clean = clean:gsub("^%d+[%.:%)%s]+", ""):gsub("%s*#.*$", "")
+        if clean ~= "" then
+            local pName, pDoor = clean:match("^([A-Za-z0-9_]+)[%s:|;,]+([A-Za-z0-9_]*)$")
+            if not pName then pName = clean:match("^([A-Za-z0-9_]+)$") end
+            if pName and pName ~= "" then
+                pName = pName:upper()
+                pDoor = pDoor or ""
+                if not existing[pName] then
+                    existing[pName] = true
+                    table.insert(CFG.farm_world_list, { name = pName, door = pDoor, done = false })
+                    added = added + 1
                 else
-                    seen[parsed.name] = true
-                    table.insert(candidateList, parsed)
+                    duplicates = duplicates + 1
                 end
             else
                 ignored = ignored + 1
-            end
-        else
-            ignored = ignored + 1
-        end
-    end
-
-    if #candidateList == 0 then
-        return 0, dups, ignored, "Tidak ada world valid yang dapat ditambahkan."
-    end
-
-    local added = 0
-    if replaceMode then
-        CFG.farm_world_list = {}
-        for _, e in ipairs(candidateList) do
-            table.insert(CFG.farm_world_list, e)
-            added = added + 1
-        end
-    else
-        local existingMap = {}
-        for _, e in ipairs(CFG.farm_world_list) do
-            existingMap[e.name] = true
-        end
-        for _, e in ipairs(candidateList) do
-            if not existingMap[e.name] then
-                existingMap[e.name] = true
-                table.insert(CFG.farm_world_list, e)
-                added = added + 1
-            else
-                dups = dups + 1
             end
         end
     end
@@ -1663,83 +1698,90 @@ local function parseAndValidateWorldBatch(rawText, replaceMode)
     savePrefs(CFG)
     saveWorldsToFile()
     updateWorldDisplayList()
-    local summary = string.format("Berhasil input %d Farm World! (Duplikat: %d | Dilewati: %d | Total: %d)",
-        added, dups, ignored, #CFG.farm_world_list)
-    return added, dups, ignored, summary
+    local summary = string.format("Sukses: %d ditambah | %d duplikat | %d diabaikan", added, duplicates, ignored)
+    return added, duplicates, ignored, summary
 end
 
-local function parseAndValidateStorageBatch(rawText, replaceMode)
-    if type(rawText) ~= "string" or rawText == "" then
-        return 0, 0, 0, "Teks kosong! Silakan tempel daftar gudang terlebih dahulu."
-    end
-    local cleaned = rawText:gsub("[\"\'%[%]%(%)]", " "):gsub("\t", " ")
-    local tokens = {}
-    for part in cleaned:gmatch("[^\r\n;,]+") do
-        local trimmed = part:gsub("^%s+", ""):gsub("%s+$", "")
-        if trimmed ~= "" then table.insert(tokens, trimmed) end
-    end
-    if #tokens == 0 then
-        return 0, 0, 0, "Tidak ada data gudang yang valid ditemukan."
+local function parseAndValidateToolBatch(rawText, isReplace)
+    if not rawText or rawText == "" then return 0, 0, 0, "Teks kosong!" end
+    local added, duplicates, ignored = 0, 0, 0
+    local existing = {}
+    if not isReplace then
+        for _, s in ipairs(CFG.storage_tool_list) do
+            existing[(s.name or ""):upper()] = true
+        end
+    else
+        CFG.storage_tool_list = {}
     end
 
-    local candidateList = {}
-    local seen = {}
-    local dups = 0
-    local ignored = 0
-
-    for _, token in ipairs(tokens) do
-        local parsed = parseWorldEntryToken(token)
-        if parsed and parsed.name ~= "" then
-            local validName = parsed.name:match("^([%w_]+)$")
-            if validName and #validName >= 1 and #validName <= 24 then
-                parsed.name = validName:upper()
-                if seen[parsed.name] then
-                    dups = dups + 1
+    for line in string.gmatch(rawText, "[^\r\n]+") do
+        local clean = line:gsub("^%s+", ""):gsub("%s+$", "")
+        clean = clean:gsub("^%d+[%.:%)%s]+", ""):gsub("%s*#.*$", "")
+        if clean ~= "" then
+            local pName, pDoor = clean:match("^([A-Za-z0-9_]+)[%s:|;,]+([A-Za-z0-9_]*)$")
+            if not pName then pName = clean:match("^([A-Za-z0-9_]+)$") end
+            if pName and pName ~= "" then
+                pName = pName:upper()
+                pDoor = pDoor or ""
+                if not existing[pName] then
+                    existing[pName] = true
+                    table.insert(CFG.storage_tool_list, { name = pName, door = pDoor })
+                    added = added + 1
                 else
-                    seen[parsed.name] = true
-                    table.insert(candidateList, { name = parsed.name, door = parsed.door })
+                    duplicates = duplicates + 1
                 end
             else
                 ignored = ignored + 1
-            end
-        else
-            ignored = ignored + 1
-        end
-    end
-
-    if #candidateList == 0 then
-        return 0, dups, ignored, "Tidak ada gudang valid yang dapat ditambahkan."
-    end
-
-    local added = 0
-    if replaceMode then
-        CFG.storage_list = {}
-        for _, e in ipairs(candidateList) do
-            table.insert(CFG.storage_list, e)
-            added = added + 1
-        end
-    else
-        local existingMap = {}
-        for _, e in ipairs(CFG.storage_list) do
-            existingMap[e.name] = true
-        end
-        for _, e in ipairs(candidateList) do
-            if not existingMap[e.name] then
-                existingMap[e.name] = true
-                table.insert(CFG.storage_list, e)
-                added = added + 1
-            else
-                dups = dups + 1
             end
         end
     end
 
     savePrefs(CFG)
-    saveStoragesToFile()
-    updateStorageDisplayList()
-    local summary = string.format("Berhasil input %d Gudang! (Duplikat: %d | Dilewati: %d | Total: %d)",
-        added, dups, ignored, #CFG.storage_list)
-    return added, dups, ignored, summary
+    saveToolsToFile()
+    updateToolDisplayList()
+    local summary = string.format("Sukses: %d ditambah | %d duplikat | %d diabaikan", added, duplicates, ignored)
+    return added, duplicates, ignored, summary
+end
+
+local function parseAndValidateBlockBatch(rawText, isReplace)
+    if not rawText or rawText == "" then return 0, 0, 0, "Teks kosong!" end
+    local added, duplicates, ignored = 0, 0, 0
+    local existing = {}
+    if not isReplace then
+        for _, s in ipairs(CFG.storage_block_list) do
+            existing[(s.name or ""):upper()] = true
+        end
+    else
+        CFG.storage_block_list = {}
+    end
+
+    for line in string.gmatch(rawText, "[^\r\n]+") do
+        local clean = line:gsub("^%s+", ""):gsub("%s+$", "")
+        clean = clean:gsub("^%d+[%.:%)%s]+", ""):gsub("%s*#.*$", "")
+        if clean ~= "" then
+            local pName, pDoor = clean:match("^([A-Za-z0-9_]+)[%s:|;,]+([A-Za-z0-9_]*)$")
+            if not pName then pName = clean:match("^([A-Za-z0-9_]+)$") end
+            if pName and pName ~= "" then
+                pName = pName:upper()
+                pDoor = pDoor or ""
+                if not existing[pName] then
+                    existing[pName] = true
+                    table.insert(CFG.storage_block_list, { name = pName, door = pDoor })
+                    added = added + 1
+                else
+                    duplicates = duplicates + 1
+                end
+            else
+                ignored = ignored + 1
+            end
+        end
+    end
+
+    savePrefs(CFG)
+    saveBlocksToFile()
+    updateBlockDisplayList()
+    local summary = string.format("Sukses: %d ditambah | %d duplikat | %d diabaikan", added, duplicates, ignored)
+    return added, duplicates, ignored, summary
 end
 
 openUnifiedWorldManager = function(fmt)
@@ -1748,197 +1790,225 @@ openUnifiedWorldManager = function(fmt)
     for _, w in ipairs(CFG.farm_world_list) do
         local d = (w.door and w.door ~= "") and w.door or ""
         if fmt == "colon" then
-            table.insert(copyLines, (d ~= "") and (w.name .. ":" .. d) or w.name)
+            table.insert(copyLines, d ~= "" and (w.name .. ":" .. d) or w.name)
         elseif fmt == "pipe" then
-            table.insert(copyLines, (d ~= "") and (w.name .. "|" .. d) or w.name)
+            table.insert(copyLines, d ~= "" and (w.name .. "|" .. d) or w.name)
         else
             table.insert(copyLines, w.name)
         end
     end
-    local rawCopy = table.concat(copyLines, "\n")
-    local rawBoxText = table.concat(copyLines, ", ")
-    if ImGui and ImGui.SetClipboardText and rawCopy ~= "" then
-        pcall(ImGui.SetClipboardText, rawCopy)
-    end
+    local copyText = table.concat(copyLines, "\n")
 
-    local dLines = {
-        "set_default_color|`o",
-        "add_quick_exit|",
-        string.format("add_label_with_icon|big|`wKelola Farm World (%d World)``|left|1336|", #CFG.farm_world_list),
-        "add_textbox|`oSalin antrean, tempel banyak world sekaligus, atau edit/hapus di bawah.|left|",
-        "add_spacer|small|",
-
-        -- Bagian 1: Salin Semua World
-        "add_textbox|`2[1. Salin Antrean World ke Clipboard]|left|",
-        string.format("add_text_input|as_wcopy_box|Salin Antrean|%s|9999|", rawBoxText),
-        "add_button|boren_btn_wfmt_colon|Format Titik Dua (:)|noflags|0|0|",
-        "add_button|boren_btn_wfmt_pipe|Format Garis (|)|noflags|0|0|",
-        "add_button|boren_btn_wfmt_name|Hanya Nama World|noflags|0|0|",
-        "add_spacer|small|",
-
-        -- Bagian 2: Tempel Banyak / Tambah World
-        "add_textbox|`2[2. Tempel / Tambah World ke Antrean]|left|",
-        "add_textbox|`eTempel 1 atau banyak world (Format: WORLD:ID / WORLD|ID / WORLD). Bebas koma/enter.|left|",
-        "add_text_input|boren_wpaste_raw|Tempel World di sini:||9999|",
-        "add_checkbox|boren_wpaste_replace|Ganti semua antrean (Replace)|0|",
-        "add_button|boren_submit_wpaste|`2+ Tempel / Tambah ke Antrean|noflags|0|0|",
-        "add_spacer|small|",
-
-        -- Bagian 3: Tambah 1 World Manual
-        "add_textbox|`2[3. Tambah 1 World Manual]|left|",
-        "add_text_input|as_dlg_add_world|Nama World:||24|",
-        "add_text_input|as_dlg_add_door|Door ID (Opsional):||24|",
-        "add_button|as_dlg_btn_add|➕ Tambah 1 World|noflags|0|0|",
-        "add_spacer|small|",
-
-        -- Bagian 4: Daftar World & Edit / Hapus
-        string.format("add_textbox|`2[4. Daftar World Saat Ini (%d World)]|left|", #CFG.farm_world_list)
-    }
+    local d = {}
+    table.insert(d, "set_default_color|`o")
+    table.insert(d, "add_label_with_icon|big|`2Kelola Antrean World Put|left|1436|")
+    table.insert(d, string.format("add_smalltext|Total antrean terdaftar: `w%d World`o|", #CFG.farm_world_list))
+    table.insert(d, "add_spacer|small|")
+    table.insert(d, "add_label|small|`9Format Ekspor / Salin Cepat:`o|")
+    table.insert(d, "add_button|boren_btn_wfmt_colon|`wFormat WORLD:DOOR`o|noflags|0|0|")
+    table.insert(d, "add_button|boren_btn_wfmt_pipe|`wFormat WORLD|DOOR`o|noflags|0|0|")
+    table.insert(d, "add_button|boren_btn_wfmt_name|`wHanya Nama World`o|noflags|0|0|")
+    table.insert(d, "add_text_input|boren_wpaste_raw|Teks Antrean World (Salin / Tempel Cepat):|" .. copyText .. "|250|")
+    table.insert(d, "add_checkbox|boren_wpaste_replace|Ganti seluruh daftar (Replace All)|0|")
+    table.insert(d, "add_button|boren_submit_wpaste|`2Terapkan Perubahan Teks Antrean`o|noflags|0|0|")
+    table.insert(d, "add_spacer|small|")
+    table.insert(d, "add_label|small|`9Daftar Antrean World Put Individual:`o|")
 
     if #CFG.farm_world_list == 0 then
-        table.insert(dLines, "add_textbox|`4(Antrean Farm World masih kosong. Silakan tempel di atas!)|left|")
+        table.insert(d, "add_smalltext|`4Belum ada world dalam antrean.`o|")
     else
-        for i, w in ipairs(CFG.farm_world_list) do
-            local st = w.done and "`2[DONE]" or "`9[ANTRI]"
-            local d = (w.door and w.door ~= "") and w.door or "-"
-            table.insert(dLines, string.format("add_textbox|`w%d. `9%s `o[Door: %s] %s|left|", i, w.name, d, st))
-            table.insert(dLines, string.format("add_button|boren_wedit_%d|Edit|noflags|0|0|", i))
-            table.insert(dLines, string.format("add_button|boren_whapus_%d|Hapus|noflags|0|0|", i))
-            table.insert(dLines, "add_spacer|small|")
+        for idx, w in ipairs(CFG.farm_world_list) do
+            local dLabel = (w.door and w.door ~= "") and (" [Door: " .. w.door .. "]") or ""
+            local statusTag = w.done and "`2[DONE]`o " or "`e[PENDING]`o "
+            table.insert(d, string.format("add_smalltext|`w%d.`o %s%s%s|", idx, statusTag, w.name, dLabel))
+            table.insert(d, string.format("add_button|boren_wedit_%d|`eEdit #%d`o|noflags|0|0|", idx, idx))
+            table.insert(d, string.format("add_button|boren_whapus_%d|`4Hapus #%d`o|noflags|0|0|", idx, idx))
+            table.insert(d, "add_spacer|small|")
         end
     end
 
-    table.insert(dLines, "add_button|as_dlg_btn_clear|`4🗑️ Kosongkan Semua World|noflags|0|0|")
-    table.insert(dLines, "add_spacer|small|")
-    table.insert(dLines, "end_dialog|boren_soil_world_mgr|Tutup||")
-
-    return safeSendRawDialog(table.concat(dLines, "\n"))
+    table.insert(d, "add_spacer|small|")
+    table.insert(d, "add_label|small|`9Tambah Satu World Put Manual:`o|")
+    table.insert(d, "add_text_input|as_dlg_add_world|Nama World:||30|")
+    table.insert(d, "add_text_input|as_dlg_add_door|Door ID (Opsional):||30|")
+    table.insert(d, "add_button|as_dlg_btn_add|`2➕ Tambah World ke Antrean`o|noflags|0|0|")
+    table.insert(d, "add_button|as_dlg_btn_clear|`4🗑️ Kosongkan Seluruh Antrean`o|noflags|0|0|")
+    table.insert(d, "add_quick_exit|")
+    table.insert(d, "end_dialog|boren_soil_world_mgr|Tutup|Simpan|")
+    safeSendRawDialog(table.concat(d, "\n"))
 end
 
-openUnifiedStorageManager = function(fmt)
+openUnifiedToolManager = function(fmt)
     fmt = fmt or "colon"
     local copyLines = {}
-    for _, s in ipairs(CFG.storage_list) do
+    for _, s in ipairs(CFG.storage_tool_list) do
         local d = (s.door and s.door ~= "") and s.door or ""
         if fmt == "colon" then
-            table.insert(copyLines, (d ~= "") and (s.name .. ":" .. d) or s.name)
+            table.insert(copyLines, d ~= "" and (s.name .. ":" .. d) or s.name)
         elseif fmt == "pipe" then
-            table.insert(copyLines, (d ~= "") and (s.name .. "|" .. d) or s.name)
+            table.insert(copyLines, d ~= "" and (s.name .. "|" .. d) or s.name)
         else
             table.insert(copyLines, s.name)
         end
     end
-    local rawCopy = table.concat(copyLines, "\n")
-    local rawBoxText = table.concat(copyLines, ", ")
-    if ImGui and ImGui.SetClipboardText and rawCopy ~= "" then
-        pcall(ImGui.SetClipboardText, rawCopy)
-    end
+    local copyText = table.concat(copyLines, "\n")
 
-    local dLines = {
-        "set_default_color|`o",
-        "add_quick_exit|",
-        string.format("add_label_with_icon|big|`wKelola Gudang Block (%d Gudang)``|left|242|", #CFG.storage_list),
-        "add_textbox|`oSalin daftar gudang, tempel banyak gudang, atau edit/hapus di bawah.|left|",
-        "add_spacer|small|",
+    local d = {}
+    table.insert(d, "set_default_color|`o")
+    table.insert(d, "add_label_with_icon|big|`2Kelola Daftar Gudang Alat|left|242|")
+    table.insert(d, string.format("add_smalltext|Total Gudang Alat (WL, SL, Jammer, Door): `w%d World`o|", #CFG.storage_tool_list))
+    table.insert(d, "add_spacer|small|")
+    table.insert(d, "add_label|small|`9Format Ekspor / Salin Cepat:`o|")
+    table.insert(d, "add_button|boren_btn_tlfmt_colon|`wFormat WORLD:DOOR`o|noflags|0|0|")
+    table.insert(d, "add_button|boren_btn_tlfmt_pipe|`wFormat WORLD|DOOR`o|noflags|0|0|")
+    table.insert(d, "add_button|boren_btn_tlfmt_name|`wHanya Nama World`o|noflags|0|0|")
+    table.insert(d, "add_text_input|boren_tlpaste_raw|Teks Gudang Alat (Salin / Tempel Cepat):|" .. copyText .. "|250|")
+    table.insert(d, "add_checkbox|boren_tlpaste_replace|Ganti seluruh daftar (Replace All)|0|")
+    table.insert(d, "add_button|boren_submit_tlpaste|`2Terapkan Perubahan Teks Gudang Alat`o|noflags|0|0|")
+    table.insert(d, "add_spacer|small|")
+    table.insert(d, "add_label|small|`9Daftar Gudang Alat Individual:`o|")
 
-        -- Bagian 1: Salin Semua Gudang
-        "add_textbox|`2[1. Salin Daftar Gudang ke Clipboard]|left|",
-        string.format("add_text_input|as_stcopy_box|Salin Gudang|%s|9999|", rawBoxText),
-        "add_button|boren_btn_stfmt_colon|Format Titik Dua (:)|noflags|0|0|",
-        "add_button|boren_btn_stfmt_pipe|Format Garis (|)|noflags|0|0|",
-        "add_button|boren_btn_stfmt_name|Hanya Nama Gudang|noflags|0|0|",
-        "add_spacer|small|",
-
-        -- Bagian 2: Tempel Banyak Gudang
-        "add_textbox|`2[2. Tempel / Tambah Gudang ke Daftar]|left|",
-        "add_textbox|`eTempel 1 atau banyak gudang (Format: GUDANG:ID / GUDANG|ID / GUDANG).|left|",
-        "add_text_input|boren_stpaste_raw|Tempel Gudang di sini:||9999|",
-        "add_checkbox|boren_stpaste_replace|Ganti semua gudang (Replace)|0|",
-        "add_button|boren_submit_stpaste|`2+ Tempel / Tambah Gudang|noflags|0|0|",
-        "add_spacer|small|",
-
-        -- Bagian 3: Tambah 1 Gudang Manual
-        "add_textbox|`2[3. Tambah 1 Gudang Manual]|left|",
-        "add_text_input|as_dlg_add_stor|Nama Gudang:||24|",
-        "add_text_input|as_dlg_add_stor_door|Door ID Gudang:||24|",
-        "add_button|as_dlg_btn_add_stor|➕ Tambah 1 Gudang|noflags|0|0|",
-        "add_spacer|small|",
-
-        -- Bagian 4: Daftar Gudang Saat Ini
-        string.format("add_textbox|`2[4. Daftar Gudang Saat Ini (%d Gudang)]|left|", #CFG.storage_list)
-    }
-
-    if #CFG.storage_list == 0 then
-        table.insert(dLines, "add_textbox|`4(Daftar Gudang masih kosong. Silakan tempel di atas!)|left|")
+    if #CFG.storage_tool_list == 0 then
+        table.insert(d, "add_smalltext|`4Belum ada world gudang alat terdaftar.`o|")
     else
-        for i, s in ipairs(CFG.storage_list) do
-            local d = (s.door and s.door ~= "") and s.door or "-"
-            table.insert(dLines, string.format("add_textbox|`w%d. `9%s `o[Door: %s]|left|", i, s.name, d))
-            table.insert(dLines, string.format("add_button|boren_stedit_%d|Edit|noflags|0|0|", i))
-            table.insert(dLines, string.format("add_button|boren_sthapus_%d|Hapus|noflags|0|0|", i))
-            table.insert(dLines, "add_spacer|small|")
+        for idx, s in ipairs(CFG.storage_tool_list) do
+            local dLabel = (s.door and s.door ~= "") and (" [Door: " .. s.door .. "]") or ""
+            table.insert(d, string.format("add_smalltext|`w%d.`o %s%s|", idx, s.name, dLabel))
+            table.insert(d, string.format("add_button|boren_tledit_%d|`eEdit #%d`o|noflags|0|0|", idx, idx))
+            table.insert(d, string.format("add_button|boren_tlhapus_%d|`4Hapus #%d`o|noflags|0|0|", idx, idx))
+            table.insert(d, "add_spacer|small|")
         end
     end
 
-    table.insert(dLines, "add_button|as_dlg_btn_clear_stor|`4🗑️ Kosongkan Semua Gudang|noflags|0|0|")
-    table.insert(dLines, "add_spacer|small|")
-    table.insert(dLines, "end_dialog|boren_soil_stor_mgr|Tutup||")
+    table.insert(d, "add_spacer|small|")
+    table.insert(d, "add_label|small|`9Tambah Satu Gudang Alat Manual:`o|")
+    table.insert(d, "add_text_input|as_dlg_add_tool|Nama World Gudang Alat:||30|")
+    table.insert(d, "add_text_input|as_dlg_add_tool_door|Door ID (Opsional):||30|")
+    table.insert(d, "add_button|as_dlg_btn_add_tool|`2➕ Tambah Gudang Alat`o|noflags|0|0|")
+    table.insert(d, "add_button|as_dlg_btn_clear_tool|`4🗑️ Kosongkan Seluruh Gudang Alat`o|noflags|0|0|")
+    table.insert(d, "add_quick_exit|")
+    table.insert(d, "end_dialog|boren_soil_tool_mgr|Tutup|Simpan|")
+    safeSendRawDialog(table.concat(d, "\n"))
+end
 
-    return safeSendRawDialog(table.concat(dLines, "\n"))
+openUnifiedBlockManager = function(fmt)
+    fmt = fmt or "colon"
+    local copyLines = {}
+    for _, s in ipairs(CFG.storage_block_list) do
+        local d = (s.door and s.door ~= "") and s.door or ""
+        if fmt == "colon" then
+            table.insert(copyLines, d ~= "" and (s.name .. ":" .. d) or s.name)
+        elseif fmt == "pipe" then
+            table.insert(copyLines, d ~= "" and (s.name .. "|" .. d) or s.name)
+        else
+            table.insert(copyLines, s.name)
+        end
+    end
+    local copyText = table.concat(copyLines, "\n")
+
+    local d = {}
+    table.insert(d, "set_default_color|`o")
+    table.insert(d, "add_label_with_icon|big|`2Kelola Daftar Gudang Block|left|8772|")
+    table.insert(d, string.format("add_smalltext|Total Gudang Block (%s): `w%d World`o|", getItemNameSafe(CFG.block_id), #CFG.storage_block_list))
+    table.insert(d, "add_spacer|small|")
+    table.insert(d, "add_label|small|`9Format Ekspor / Salin Cepat:`o|")
+    table.insert(d, "add_button|boren_btn_bkfmt_colon|`wFormat WORLD:DOOR`o|noflags|0|0|")
+    table.insert(d, "add_button|boren_btn_bkfmt_pipe|`wFormat WORLD|DOOR`o|noflags|0|0|")
+    table.insert(d, "add_button|boren_btn_bkfmt_name|`wHanya Nama World`o|noflags|0|0|")
+    table.insert(d, "add_text_input|boren_bkpaste_raw|Teks Gudang Block (Salin / Tempel Cepat):|" .. copyText .. "|250|")
+    table.insert(d, "add_checkbox|boren_bkpaste_replace|Ganti seluruh daftar (Replace All)|0|")
+    table.insert(d, "add_button|boren_submit_bkpaste|`2Terapkan Perubahan Teks Gudang Block`o|noflags|0|0|")
+    table.insert(d, "add_spacer|small|")
+    table.insert(d, "add_label|small|`9Daftar Gudang Block Individual:`o|")
+
+    if #CFG.storage_block_list == 0 then
+        table.insert(d, "add_smalltext|`4Belum ada world gudang block terdaftar.`o|")
+    else
+        for idx, s in ipairs(CFG.storage_block_list) do
+            local dLabel = (s.door and s.door ~= "") and (" [Door: " .. s.door .. "]") or ""
+            table.insert(d, string.format("add_smalltext|`w%d.`o %s%s|", idx, s.name, dLabel))
+            table.insert(d, string.format("add_button|boren_bkedit_%d|`eEdit #%d`o|noflags|0|0|", idx, idx))
+            table.insert(d, string.format("add_button|boren_bkhapus_%d|`4Hapus #%d`o|noflags|0|0|", idx, idx))
+            table.insert(d, "add_spacer|small|")
+        end
+    end
+
+    table.insert(d, "add_spacer|small|")
+    table.insert(d, "add_label|small|`9Tambah Satu Gudang Block Manual:`o|")
+    table.insert(d, "add_text_input|as_dlg_add_block|Nama World Gudang Block:||30|")
+    table.insert(d, "add_text_input|as_dlg_add_block_door|Door ID (Opsional):||30|")
+    table.insert(d, "add_button|as_dlg_btn_add_block|`2➕ Tambah Gudang Block`o|noflags|0|0|")
+    table.insert(d, "add_button|as_dlg_btn_clear_block|`4🗑️ Kosongkan Seluruh Gudang Block`o|noflags|0|0|")
+    table.insert(d, "add_quick_exit|")
+    table.insert(d, "end_dialog|boren_soil_block_mgr|Tutup|Simpan|")
+    safeSendRawDialog(table.concat(d, "\n"))
 end
 
 openEditWorldEntryDialog = function(idx)
-    idx = tonumber(idx) or 0
-    local w = CFG.farm_world_list[idx]
-    if not w then return false end
-    local dLines = {
-        "set_default_color|`o",
-        "add_quick_exit|",
-        string.format("add_label_with_icon|big|`wEdit Farm World #%d``|left|1336|", idx),
-        "add_textbox|`oUbah nama world atau Door ID di bawah ini:|left|",
-        "add_spacer|small|",
-        string.format("add_text_input|boren_ed_wname|Nama World|%s|32|", w.name or ""),
-        string.format("add_text_input|boren_ed_wdoor|Door ID (Kosong = White Door)|%s|32|", w.door or ""),
-        "add_spacer|small|",
-        string.format("add_button|boren_save_wedit_%d|`2Simpan Perubahan|noflags|0|0|", idx),
-        "end_dialog|boren_soil_edit_w_dlg|Batal||"
-    }
-    return safeSendRawDialog(table.concat(dLines, "\n"))
+    idx = tonumber(idx)
+    if not idx or not CFG.farm_world_list[idx] then return end
+    local entry = CFG.farm_world_list[idx]
+    local d = {}
+    table.insert(d, "set_default_color|`o")
+    table.insert(d, string.format("add_label_with_icon|big|`2Edit World Put #%d|left|1436|", idx))
+    table.insert(d, "add_spacer|small|")
+    table.insert(d, "add_text_input|boren_ed_wname|Nama World:|" .. tostring(entry.name or "") .. "|30|")
+    table.insert(d, "add_text_input|boren_ed_wdoor|Door ID:|" .. tostring(entry.door or "") .. "|30|")
+    table.insert(d, "add_spacer|small|")
+    table.insert(d, string.format("add_button|boren_save_wedit_%d|`2Simpan Perubahan`o|noflags|0|0|", idx))
+    table.insert(d, "add_quick_exit|")
+    table.insert(d, "end_dialog|boren_soil_edit_w_dlg|Batal||")
+    safeSendRawDialog(table.concat(d, "\n"))
 end
 
-openEditStorageEntryDialog = function(idx)
-    idx = tonumber(idx) or 0
-    local s = CFG.storage_list[idx]
-    if not s then return false end
-    local dLines = {
-        "set_default_color|`o",
-        "add_quick_exit|",
-        string.format("add_label_with_icon|big|`wEdit Gudang Block #%d``|left|242|", idx),
-        "add_textbox|`oUbah nama gudang atau Door ID di bawah ini:|left|",
-        "add_spacer|small|",
-        string.format("add_text_input|boren_ed_sname|Nama Gudang|%s|32|", s.name or ""),
-        string.format("add_text_input|boren_ed_sdoor|Door ID (Kosong = White Door)|%s|32|", s.door or ""),
-        "add_spacer|small|",
-        string.format("add_button|boren_save_stedit_%d|`2Simpan Perubahan|noflags|0|0|", idx),
-        "end_dialog|boren_soil_edit_s_dlg|Batal||"
-    }
-    return safeSendRawDialog(table.concat(dLines, "\n"))
+openEditToolEntryDialog = function(idx)
+    idx = tonumber(idx)
+    if not idx or not CFG.storage_tool_list[idx] then return end
+    local entry = CFG.storage_tool_list[idx]
+    local d = {}
+    table.insert(d, "set_default_color|`o")
+    table.insert(d, string.format("add_label_with_icon|big|`2Edit Gudang Alat #%d|left|242|", idx))
+    table.insert(d, "add_spacer|small|")
+    table.insert(d, "add_text_input|boren_ed_tlname|Nama World Gudang Alat:|" .. tostring(entry.name or "") .. "|30|")
+    table.insert(d, "add_text_input|boren_ed_tldoor|Door ID:|" .. tostring(entry.door or "") .. "|30|")
+    table.insert(d, "add_spacer|small|")
+    table.insert(d, string.format("add_button|boren_save_tledit_%d|`2Simpan Perubahan`o|noflags|0|0|", idx))
+    table.insert(d, "add_quick_exit|")
+    table.insert(d, "end_dialog|boren_soil_edit_t_dlg|Batal||")
+    safeSendRawDialog(table.concat(d, "\n"))
 end
 
-local function parseDialogReturnFields(pkt)
+openEditBlockEntryDialog = function(idx)
+    idx = tonumber(idx)
+    if not idx or not CFG.storage_block_list[idx] then return end
+    local entry = CFG.storage_block_list[idx]
+    local d = {}
+    table.insert(d, "set_default_color|`o")
+    table.insert(d, string.format("add_label_with_icon|big|`2Edit Gudang Block #%d|left|8772|", idx))
+    table.insert(d, "add_spacer|small|")
+    table.insert(d, "add_text_input|boren_ed_bkname|Nama World Gudang Block:|" .. tostring(entry.name or "") .. "|30|")
+    table.insert(d, "add_text_input|boren_ed_bkdoor|Door ID:|" .. tostring(entry.door or "") .. "|30|")
+    table.insert(d, "add_spacer|small|")
+    table.insert(d, string.format("add_button|boren_save_bkedit_%d|`2Simpan Perubahan`o|noflags|0|0|", idx))
+    table.insert(d, "add_quick_exit|")
+    table.insert(d, "end_dialog|boren_soil_edit_b_dlg|Batal||")
+    safeSendRawDialog(table.concat(d, "\n"))
+end
+
+-- ============================================================================
+-- DIALOG HOOK DISPATCHER
+-- ============================================================================
+local function onDialogReturnPacket(pkt)
+    if not pkt or pkt == "" then return false end
+    local dName = pkt:match("dialog_name|([^\r\n]+)")
+    local btn   = pkt:match("buttonClicked|([^\r\n]+)")
+    if not dName then return false end
+
     local fields = {}
-    for line in pkt:gmatch("[^\r\n]+") do
+    for line in string.gmatch(pkt, "[^\r\n]+") do
         local k, v = line:match("^([^|]+)|(.*)$")
-        if k then fields[k] = v end
+        if k then fields[k] = v or "" end
     end
-    return fields
-end
-
-local function onSendPacketDialogHook(ptype, pkt)
-    if type(pkt) ~= "string" or not pkt:find("action|dialog_return", 1, true) then return false end
-    local fields = parseDialogReturnFields(pkt)
-    local dName = fields.dialog_name or ""
-    local btn = fields.buttonClicked or ""
 
     if dName == "boren_soil_world_mgr" then
         if btn == "boren_btn_wfmt_colon" then
@@ -1956,7 +2026,7 @@ local function onSendPacketDialogHook(ptype, pkt)
                 or fields.boren_wpaste_raw or ""
             local isReplace = (fields.boren_wpaste_replace == "1")
             local added, dups, ign, summary = parseAndValidateWorldBatch(raw, isReplace)
-            addLog("[Quick Paste Farm] " .. summary)
+            addLog("[Quick Paste World] " .. summary)
             notifyUser(summary)
             openUnifiedWorldManager()
             return true
@@ -1980,7 +2050,7 @@ local function onSendPacketDialogHook(ptype, pkt)
             savePrefs(CFG)
             saveWorldsToFile()
             updateWorldDisplayList()
-            addLog("`4[Bersihkan World] `oDaftar world dikosongkan.")
+            addLog("`4[Bersihkan World] `oDaftar world put dikosongkan.")
             notifyUser("Daftar world dikosongkan!")
             openUnifiedWorldManager()
             return true
@@ -2008,70 +2078,138 @@ local function onSendPacketDialogHook(ptype, pkt)
         end
         return true
 
-    elseif dName == "boren_soil_stor_mgr" then
-        if btn == "boren_btn_stfmt_colon" then
-            openUnifiedStorageManager("colon")
+    elseif dName == "boren_soil_tool_mgr" then
+        if btn == "boren_btn_tlfmt_colon" then
+            openUnifiedToolManager("colon")
             return true
-        elseif btn == "boren_btn_stfmt_pipe" then
-            openUnifiedStorageManager("pipe")
+        elseif btn == "boren_btn_tlfmt_pipe" then
+            openUnifiedToolManager("pipe")
             return true
-        elseif btn == "boren_btn_stfmt_name" then
-            openUnifiedStorageManager("name_only")
+        elseif btn == "boren_btn_tlfmt_name" then
+            openUnifiedToolManager("name_only")
             return true
-        elseif btn == "boren_submit_stpaste" then
-            local raw = pkt:match("boren_stpaste_raw|(.-)\nboren_stpaste_replace|")
-                or pkt:match("boren_stpaste_raw|(.-)\nbuttonClicked|")
-                or fields.boren_stpaste_raw or ""
-            local isReplace = (fields.boren_stpaste_replace == "1")
-            local added, dups, ign, summary = parseAndValidateStorageBatch(raw, isReplace)
-            addLog("[Quick Paste Gudang] " .. summary)
+        elseif btn == "boren_submit_tlpaste" then
+            local raw = pkt:match("boren_tlpaste_raw|(.-)\nboren_tlpaste_replace|")
+                or pkt:match("boren_tlpaste_raw|(.-)\nbuttonClicked|")
+                or fields.boren_tlpaste_raw or ""
+            local isReplace = (fields.boren_tlpaste_replace == "1")
+            local added, dups, ign, summary = parseAndValidateToolBatch(raw, isReplace)
+            addLog("[Quick Paste Alat] " .. summary)
             notifyUser(summary)
-            openUnifiedStorageManager()
+            openUnifiedToolManager()
             return true
-        elseif btn == "as_dlg_btn_add_stor" then
-            local ns = tostring(fields.as_dlg_add_stor or ""):gsub("%s+", ""):upper()
-            local nd = tostring(fields.as_dlg_add_stor_door or ""):gsub("^%s+", ""):gsub("%s+$", "")
+        elseif btn == "as_dlg_btn_add_tool" then
+            local ns = tostring(fields.as_dlg_add_tool or ""):gsub("%s+", ""):upper()
+            local nd = tostring(fields.as_dlg_add_tool_door or ""):gsub("^%s+", ""):gsub("%s+$", "")
             if ns ~= "" then
-                table.insert(CFG.storage_list, { name = ns, door = nd })
+                table.insert(CFG.storage_tool_list, { name = ns, door = nd })
                 savePrefs(CFG)
-                saveStoragesToFile()
-                updateStorageDisplayList()
-                addLog(string.format("`2[Tambah Gudang] `w%s [Door: %s] ditambahkan.", ns, (nd ~= "" and nd or "-")))
-                notifyUser("Gudang " .. ns .. " ditambahkan!")
+                saveToolsToFile()
+                updateToolDisplayList()
+                addLog(string.format("`2[Tambah Gudang Alat] `w%s [Door: %s] ditambahkan.", ns, (nd ~= "" and nd or "-")))
+                notifyUser("Gudang Alat " .. ns .. " ditambahkan!")
             else
-                notifyUser("Isi nama gudang terlebih dahulu!")
+                notifyUser("Isi nama gudang alat terlebih dahulu!")
             end
-            openUnifiedStorageManager()
+            openUnifiedToolManager()
             return true
-        elseif btn == "as_dlg_btn_clear_stor" then
-            CFG.storage_list = {}
+        elseif btn == "as_dlg_btn_clear_tool" then
+            CFG.storage_tool_list = {}
             savePrefs(CFG)
-            saveStoragesToFile()
-            updateStorageDisplayList()
-            addLog("`4[Bersihkan Gudang] `oDaftar gudang dikosongkan.")
-            notifyUser("Daftar gudang dikosongkan!")
-            openUnifiedStorageManager()
+            saveToolsToFile()
+            updateToolDisplayList()
+            addLog("`4[Bersihkan Gudang Alat] `oDaftar gudang alat dikosongkan.")
+            notifyUser("Daftar gudang alat dikosongkan!")
+            openUnifiedToolManager()
             return true
         end
 
-        local editIdx = btn:match("^boren_stedit_(%d+)$")
+        local editIdx = btn:match("^boren_tledit_(%d+)$")
         if editIdx then
-            openEditStorageEntryDialog(tonumber(editIdx))
+            openEditToolEntryDialog(tonumber(editIdx))
             return true
         end
 
-        local hapusIdx = btn:match("^boren_sthapus_(%d+)$")
+        local hapusIdx = btn:match("^boren_tlhapus_(%d+)$")
         if hapusIdx then
             local idx = tonumber(hapusIdx)
-            if idx and CFG.storage_list[idx] then
-                local removed = table.remove(CFG.storage_list, idx)
+            if idx and CFG.storage_tool_list[idx] then
+                local removed = table.remove(CFG.storage_tool_list, idx)
                 savePrefs(CFG)
-                saveStoragesToFile()
-                updateStorageDisplayList()
-                addLog(string.format("`4[Hapus Gudang] `o%s dihapus dari gudang.", removed.name))
+                saveToolsToFile()
+                updateToolDisplayList()
+                addLog(string.format("`4[Hapus Gudang Alat] `o%s dihapus.", removed.name))
                 notifyUser("Dihapus: " .. removed.name)
             end
-            openUnifiedStorageManager()
+            openUnifiedToolManager()
+            return true
+        end
+        return true
+
+    elseif dName == "boren_soil_block_mgr" then
+        if btn == "boren_btn_bkfmt_colon" then
+            openUnifiedBlockManager("colon")
+            return true
+        elseif btn == "boren_btn_bkfmt_pipe" then
+            openUnifiedBlockManager("pipe")
+            return true
+        elseif btn == "boren_btn_bkfmt_name" then
+            openUnifiedBlockManager("name_only")
+            return true
+        elseif btn == "boren_submit_bkpaste" then
+            local raw = pkt:match("boren_bkpaste_raw|(.-)\nboren_bkpaste_replace|")
+                or pkt:match("boren_bkpaste_raw|(.-)\nbuttonClicked|")
+                or fields.boren_bkpaste_raw or ""
+            local isReplace = (fields.boren_bkpaste_replace == "1")
+            local added, dups, ign, summary = parseAndValidateBlockBatch(raw, isReplace)
+            addLog("[Quick Paste Block] " .. summary)
+            notifyUser(summary)
+            openUnifiedBlockManager()
+            return true
+        elseif btn == "as_dlg_btn_add_block" then
+            local ns = tostring(fields.as_dlg_add_block or ""):gsub("%s+", ""):upper()
+            local nd = tostring(fields.as_dlg_add_block_door or ""):gsub("^%s+", ""):gsub("%s+$", "")
+            if ns ~= "" then
+                table.insert(CFG.storage_block_list, { name = ns, door = nd })
+                savePrefs(CFG)
+                saveBlocksToFile()
+                updateBlockDisplayList()
+                addLog(string.format("`2[Tambah Gudang Block] `w%s [Door: %s] ditambahkan.", ns, (nd ~= "" and nd or "-")))
+                notifyUser("Gudang Block " .. ns .. " ditambahkan!")
+            else
+                notifyUser("Isi nama gudang block terlebih dahulu!")
+            end
+            openUnifiedBlockManager()
+            return true
+        elseif btn == "as_dlg_btn_clear_block" then
+            CFG.storage_block_list = {}
+            savePrefs(CFG)
+            saveBlocksToFile()
+            updateBlockDisplayList()
+            addLog("`4[Bersihkan Gudang Block] `oDaftar gudang block dikosongkan.")
+            notifyUser("Daftar gudang block dikosongkan!")
+            openUnifiedBlockManager()
+            return true
+        end
+
+        local editIdx = btn:match("^boren_bkedit_(%d+)$")
+        if editIdx then
+            openEditBlockEntryDialog(tonumber(editIdx))
+            return true
+        end
+
+        local hapusIdx = btn:match("^boren_bkhapus_(%d+)$")
+        if hapusIdx then
+            local idx = tonumber(hapusIdx)
+            if idx and CFG.storage_block_list[idx] then
+                local removed = table.remove(CFG.storage_block_list, idx)
+                savePrefs(CFG)
+                saveBlocksToFile()
+                updateBlockDisplayList()
+                addLog(string.format("`4[Hapus Gudang Block] `o%s dihapus.", removed.name))
+                notifyUser("Dihapus: " .. removed.name)
+            end
+            openUnifiedBlockManager()
             return true
         end
         return true
@@ -2098,24 +2236,46 @@ local function onSendPacketDialogHook(ptype, pkt)
         end
         return true
 
-    elseif dName == "boren_soil_edit_s_dlg" then
-        local saveIdx = btn:match("^boren_save_stedit_(%d+)$")
+    elseif dName == "boren_soil_edit_t_dlg" then
+        local saveIdx = btn:match("^boren_save_tledit_(%d+)$")
         if saveIdx then
             local idx = tonumber(saveIdx)
-            if idx and CFG.storage_list[idx] then
-                local newName = tostring(fields.boren_ed_sname or ""):gsub("%s+", ""):upper()
-                local newDoor = tostring(fields.boren_ed_sdoor or ""):gsub("^%s+", ""):gsub("%s+$", "")
+            if idx and CFG.storage_tool_list[idx] then
+                local newName = tostring(fields.boren_ed_tlname or ""):gsub("%s+", ""):upper()
+                local newDoor = tostring(fields.boren_ed_tldoor or ""):gsub("^%s+", ""):gsub("%s+$", "")
                 if newName ~= "" then
-                    CFG.storage_list[idx].name = newName
-                    CFG.storage_list[idx].door = newDoor
+                    CFG.storage_tool_list[idx].name = newName
+                    CFG.storage_tool_list[idx].door = newDoor
                     savePrefs(CFG)
-                    saveStoragesToFile()
-                    updateStorageDisplayList()
-                    addLog(string.format("`2[Edit Gudang #%d] `w%s [Door: %s]", idx, newName, (newDoor ~= "" and newDoor or "-")))
-                    notifyUser("Gudang diperbarui: " .. newName)
+                    saveToolsToFile()
+                    updateToolDisplayList()
+                    addLog(string.format("`2[Edit Gudang Alat #%d] `w%s [Door: %s]", idx, newName, (newDoor ~= "" and newDoor or "-")))
+                    notifyUser("Gudang Alat diperbarui: " .. newName)
                 end
             end
-            openUnifiedStorageManager()
+            openUnifiedToolManager()
+            return true
+        end
+        return true
+
+    elseif dName == "boren_soil_edit_b_dlg" then
+        local saveIdx = btn:match("^boren_save_bkedit_(%d+)$")
+        if saveIdx then
+            local idx = tonumber(saveIdx)
+            if idx and CFG.storage_block_list[idx] then
+                local newName = tostring(fields.boren_ed_bkname or ""):gsub("%s+", ""):upper()
+                local newDoor = tostring(fields.boren_ed_bkdoor or ""):gsub("^%s+", ""):gsub("%s+$", "")
+                if newName ~= "" then
+                    CFG.storage_block_list[idx].name = newName
+                    CFG.storage_block_list[idx].door = newDoor
+                    savePrefs(CFG)
+                    saveBlocksToFile()
+                    updateBlockDisplayList()
+                    addLog(string.format("`2[Edit Gudang Block #%d] `w%s [Door: %s]", idx, newName, (newDoor ~= "" and newDoor or "-")))
+                    notifyUser("Gudang Block diperbarui: " .. newName)
+                end
+            end
+            openUnifiedBlockManager()
             return true
         end
         return true
@@ -2124,28 +2284,67 @@ local function onSendPacketDialogHook(ptype, pkt)
     return false
 end
 
+if addHook then
+    pcall(addHook, "onvariant", "boren_soil_dlg_var", function(v)
+        if v and v[0] == "OnDialogRequest" and v[1] then
+            -- Passthrough
+        end
+    end)
+    pcall(addHook, "onsendpacket", "boren_soil_pkt_hook", function(t, str)
+        if t == 2 and str and str:find("dialog_name|boren_soil_") then
+            onDialogReturnPacket(str)
+        end
+    end)
+end
+
 -- ============================================================================
--- 16. NATIVE GROWLAUNCHER UI BUILDER (STANDAR RESMI GROWLAUNCHER APK)
+-- 16. NATIVE GROWLAUNCHER UI BUILDER (6 PROFESSIONAL TABS)
 -- ============================================================================
-local function createNativeUI(subName, iconName)
-    if UserInterface and UserInterface.new then
-        return UserInterface.new(subName, iconName)
+local function createNativeUI(moduleName, iconName)
+    local ui = {
+        name = moduleName,
+        icon = iconName or "Build",
+        components = {}
+    }
+    function ui:addLabelApp(title, icon)
+        table.insert(self.components, { type = "label_app", text = title, icon = icon or "Build" })
     end
-    local ui = { sub_name = subName, icon = iconName, menu = {} }
-    function ui:addLabelApp(text, icon) table.insert(self.menu, { type = "labelapp", text = text, icon = icon or "" }) return self end
-    function ui:addLabel(text) table.insert(self.menu, { type = "label", text = text }) return self end
-    function ui:addDivider() table.insert(self.menu, { type = "divider" }) return self end
-    function ui:addToggle(text, default, alias, autosave) table.insert(self.menu, { type = "toggle", text = text, default = default == true, alias = alias, autosave = autosave == true }) return self end
-    function ui:addToggleButton(text, default, alias) table.insert(self.menu, { type = "toggle_button", text = text, default = default == true, alias = alias }) return self end
-    function ui:addButton(text, alias) table.insert(self.menu, { type = "button", text = text, alias = alias }) return self end
-    function ui:addInputString(text, default, label, placeholder, icon, alias) table.insert(self.menu, { type = "input_string", text = text, default = default or "", label = label or "Text", placeholder = placeholder or "", icon = icon or "", alias = alias }) return self end
-    function ui:addInputInt(text, default, label, placeholder, icon, alias) table.insert(self.menu, { type = "input_int", text = text, default = tostring(default or "0"), label = label or "Value", placeholder = placeholder or "0", icon = icon or "", alias = alias }) return self end
-    function ui:addSlider(text, minVal, maxVal, defaultVal, stepVal, useDot, alias) table.insert(self.menu, { type = "slider", text = text, min = minVal, max = maxVal, default = defaultVal, step = stepVal, use_dot = useDot == true, alias = alias }) return self end
-    function ui:addTooltip(text, supportText, icon, background) table.insert(self.menu, { type = "tooltip", text = text, support_text = supportText or "", icon = icon or "Info", background = background == true }) return self end
-    function ui:addItemPicker(text, item, default, alias) table.insert(self.menu, { type = "item_picker", text = text, item = item or "Blank", default = tostring(default or "0"), alias = alias }) return self end
-    function ui:addDisplayList(text, displayType, alias) table.insert(self.menu, { type = "display_list", text = text, default = displayType or "Default", alias = alias }) return self end
+    function ui:addLabel(text)
+        table.insert(self.components, { type = "label", text = text })
+    end
+    function ui:addButton(title, alias)
+        table.insert(self.components, { type = "button", title = title, alias = alias })
+    end
+    function ui:addToggleButton(title, state, alias)
+        table.insert(self.components, { type = "toggle_button", title = title, state = state, alias = alias })
+    end
+    function ui:addToggle(title, state, alias, isCheckbox)
+        table.insert(self.components, { type = "toggle", title = title, state = state, alias = alias, checkbox = isCheckbox or false })
+    end
+    function ui:addSlider(title, min, max, value, step, isFloat, alias)
+        table.insert(self.components, { type = "slider", title = title, min = min, max = max, value = value, step = step or 1, float = isFloat or false, alias = alias })
+    end
+    function ui:addInputString(title, value, placeholder, hint, icon, alias)
+        table.insert(self.components, { type = "input_string", title = title, value = value or "", placeholder = placeholder or "", hint = hint or "", icon = icon or "Edit", alias = alias })
+    end
+    function ui:addInputInt(title, value, placeholder, hint, icon, alias)
+        table.insert(self.components, { type = "input_int", title = title, value = value or "0", placeholder = placeholder or "", hint = hint or "", icon = icon or "FormatListNumbered", alias = alias })
+    end
+    function ui:addDisplayList(title, style, alias)
+        table.insert(self.components, { type = "display_list", title = title, style = style or "Default", alias = alias })
+    end
+    function ui:addDivider()
+        table.insert(self.components, { type = "divider" })
+    end
+    function ui:addTooltip(title, desc, icon, defaultOpen)
+        table.insert(self.components, { type = "tooltip", title = title, desc = desc, icon = icon or "Info", open = defaultOpen or false })
+    end
     function ui:generateJSON()
-        return jsonEncode({ sub_name = self.sub_name, icon = self.icon, menu = self.menu })
+        return jsonEncode({
+            name = self.name,
+            icon = self.icon,
+            components = self.components
+        })
     end
     return ui
 end
@@ -2156,26 +2355,26 @@ local function registerNativeSoilUI()
         return
     end
 
-    -- Tab 1: Dashboard & World Farm
-    local uiWorld = createNativeUI("1. Dashboard & World", "PlayArrow")
+    -- Tab 1: Dashboard & World Put
+    local uiWorld = createNativeUI("1. Dashboard & World Put", "PlayArrow")
     uiWorld:addLabelApp("Boren Farm Builder", "Grass")
     uiWorld:addToggleButton("▶ Mulai Bot", false, "as_run_power")
     uiWorld:addButton("■ Hentikan Bot", "as_btn_stop")
     uiWorld:addToggle("Jeda Bot", false, "as_pause_toggle", false)
     uiWorld:addDisplayList("Status Operasi", "Default", "as_power_status_list")
     uiWorld:addDivider()
-    uiWorld:addLabel("Daftar Antrean World:")
-    uiWorld:addInputString("Nama World", "", "World", "WORLD1", "Public", "as_input_add_world")
+    uiWorld:addLabel("Daftar Antrean World Put (Farm):")
+    uiWorld:addInputString("Nama World Put", "", "World", "WORLD1", "Public", "as_input_add_world")
     uiWorld:addInputString("Door ID (Opsional)", "", "Door ID", "Kosong = White Door", "DoorFront", "as_input_add_door")
-    uiWorld:addButton("➕ Tambah World ke Antrean", "as_btn_add_world")
-    uiWorld:addButton("📍 Tambah World Aktif", "as_btn_add_cur_world")
-    uiWorld:addButton("📋 Kelola Antrean World", "as_btn_manage_worlds")
-    uiWorld:addButton("🗑️ Kosongkan Antrean", "as_btn_clear_worlds")
+    uiWorld:addButton("➕ Tambah World Put", "as_btn_add_world")
+    uiWorld:addButton("📍 Tambah World Sekarang", "as_btn_add_cur_world")
+    uiWorld:addButton("📋 Kelola World Put", "as_btn_manage_worlds")
+    uiWorld:addButton("🗑️ Kosongkan World Put", "as_btn_clear_worlds")
     uiWorld:addDivider()
     uiWorld:addLabel("Penyimpanan File Cadangan (Download):")
     uiWorld:addButton("📥 Simpan Antrean ke File", "as_btn_save_worlds")
     uiWorld:addButton("📤 Muat Antrean dari File", "as_btn_load_worlds")
-    uiWorld:addDisplayList("Daftar Antrean World", "Default", "as_world_display_list")
+    uiWorld:addDisplayList("Daftar Antrean World Put", "Default", "as_world_display_list")
     uiWorld:addDivider()
     uiWorld:addLabel("Pencarian World Otomatis:")
     uiWorld:addToggle("Mode Acak World", CFG.world_mode == "RANDOM", "as_chk_mode_random", true)
@@ -2191,7 +2390,7 @@ local function registerNativeSoilUI()
     -- Tab 2: Proteksi & Kunci
     local uiLock = createNativeUI("2. Proteksi & Kunci", "Lock")
     uiLock:addLabelApp("Proteksi Akses Pintu", "Lock")
-    uiLock:addTooltip("Formasi Proteksi", "Formasi: White Door (kanan-bawah), Blocker Door (kanan-atas), Small Lock (tengah-atas), Signal Jammer (tengah-bawah), Wooden Door (kiri-atas), World Lock (kiri-bawah).", "Verified", false)
+    uiLock:addTooltip("Formasi Proteksi", "Formasi Layout: White Door di (X, Y), Jammer di (X-1, Y), Small Lock di (X-1, Y-1), World Lock di (X-2, Y), dan Wooden Door di koordinat (0, 0) seperti Dirt Farm (DF).", "Verified", false)
     uiLock:addToggle("Aktifkan Proteksi Kunci", CFG.enable_lock_enclosure, "as_chk_enable_lock", true)
     uiLock:addDivider()
     uiLock:addInputInt("ID World Lock", tostring(CFG.lock_id_wl), "ID WL", "242", "Lock", "as_in_id_wl")
@@ -2201,31 +2400,46 @@ local function registerNativeSoilUI()
     uiLock:addDivider()
     uiLock:addInputInt("ID Signal Jammer", tostring(CFG.lock_id_jammer), "ID Jammer", "226", "WifiTethering", "as_in_id_jammer")
     uiLock:addDivider()
-    uiLock:addInputInt("ID Blocker Door", tostring(CFG.lock_id_blocker), "ID Blocker", "828 (Air Vent)", "DoorFront", "as_in_id_blocker")
-    uiLock:addDivider()
-    uiLock:addInputInt("ID Wooden Door", tostring(CFG.lock_id_door), "ID Door", "12 (Wooden Door)", "DoorFront", "as_in_id_door")
-    uiLock:addInputString("Label Door ID", CFG.farm_door_id, "Door ID", "BOREN", "Label", "as_in_door_label")
+    uiLock:addInputInt("ID Wooden Door (0, 0)", tostring(CFG.lock_id_door), "ID Door", "12 (Wooden Door)", "DoorFront", "as_in_id_door")
+    uiLock:addInputString("Label Door ID (0, 0)", CFG.farm_door_id, "Door ID", "BOREN", "Label", "as_in_door_label")
     uiLock:addButton("💾 Simpan Konfigurasi Proteksi", "as_btn_save_lock_cfg")
 
-    -- Tab 3: Gudang & Restock
-    local uiStorage = createNativeUI("3. Gudang & Restock", "Inventory")
-    uiStorage:addLabelApp("Manajemen Gudang Multi-Storage", "Inventory")
-    uiStorage:addInputString("Nama Gudang", "", "World", "GUDANG1", "Inventory", "as_input_add_stor")
-    uiStorage:addInputString("Door ID Gudang", "", "Door ID", "DOOR123", "DoorFront", "as_input_add_stor_door")
-    uiStorage:addButton("➕ Tambah Gudang", "as_btn_add_stor_direct")
-    uiStorage:addButton("📍 Tambah Gudang Aktif", "as_btn_add_cur_stor")
-    uiStorage:addButton("📋 Kelola Daftar Gudang", "as_btn_manage_storages")
-    uiStorage:addButton("🗑️ Kosongkan Gudang", "as_btn_clear_stor_direct")
-    uiStorage:addDivider()
-    uiStorage:addLabel("Penyimpanan File Gudang (Download):")
-    uiStorage:addButton("📥 Simpan Gudang ke File", "as_btn_save_storages")
-    uiStorage:addButton("📤 Muat Gudang dari File", "as_btn_load_storages")
-    uiStorage:addDisplayList("Daftar Gudang Tersimpan", "Default", "as_stor_display_list")
-    uiStorage:addDivider()
-    uiStorage:addSlider("Batas Minimum Restock", 10, 100, CFG.restock_threshold, 5, false, "as_in_restock_thresh")
+    -- Tab 3: Gudang Alat
+    local uiTool = createNativeUI("3. Gudang Alat", "Construction")
+    uiTool:addLabelApp("Gudang Alat & Kunci Proteksi", "Construction")
+    uiTool:addTooltip("Fungsi Gudang Alat", "World khusus penyimpanan stok World Lock, Small Lock, Signal Jammer, dan Wooden Door.", "Info", false)
+    uiTool:addInputString("Nama World Alat", "", "World", "GUDANGALAT1", "Construction", "as_input_add_tool")
+    uiTool:addInputString("Door ID Gudang Alat", "", "Door ID", "DOOR123", "DoorFront", "as_input_add_tool_door")
+    uiTool:addButton("➕ Tambah World Alat", "as_btn_add_tool_direct")
+    uiTool:addButton("📍 Tambah World Sekarang", "as_btn_add_cur_tool")
+    uiTool:addButton("📋 Kelola World Alat", "as_btn_manage_tools")
+    uiTool:addButton("🗑️ Kosongkan World Alat", "as_btn_clear_tool_direct")
+    uiTool:addDivider()
+    uiTool:addLabel("Penyimpanan File Gudang Alat (Download):")
+    uiTool:addButton("📥 Simpan Alat ke File", "as_btn_save_tools")
+    uiTool:addButton("📤 Muat Alat dari File", "as_btn_load_tools")
+    uiTool:addDisplayList("Daftar Gudang Alat", "Default", "as_tool_display_list")
 
-    -- Tab 4: Desain & Layout
-    local uiLayout = createNativeUI("4. Desain & Layout", "Build")
+    -- Tab 4: Gudang Block
+    local uiBlock = createNativeUI("4. Gudang Block", "Inventory")
+    uiBlock:addLabelApp("Gudang Material Block Farm", "Inventory")
+    uiBlock:addTooltip("Fungsi Gudang Block", "World khusus penyimpanan floating item Soil Block (ID 8772) atau block lainnya.", "Info", false)
+    uiBlock:addInputString("Nama World Block", "", "World", "GUDANGSOIL1", "Inventory", "as_input_add_block")
+    uiBlock:addInputString("Door ID Gudang Block", "", "Door ID", "DOOR123", "DoorFront", "as_input_add_block_door")
+    uiBlock:addButton("➕ Tambah World Block", "as_btn_add_block_direct")
+    uiBlock:addButton("📍 Tambah World Sekarang", "as_btn_add_cur_block")
+    uiBlock:addButton("📋 Kelola World Block", "as_btn_manage_blocks")
+    uiBlock:addButton("🗑️ Kosongkan World Block", "as_btn_clear_block_direct")
+    uiBlock:addDivider()
+    uiBlock:addLabel("Penyimpanan File Gudang Block (Download):")
+    uiBlock:addButton("📥 Simpan Block ke File", "as_btn_save_blocks")
+    uiBlock:addButton("📤 Muat Block dari File", "as_btn_load_blocks")
+    uiBlock:addDisplayList("Daftar Gudang Block", "Default", "as_block_display_list")
+    uiBlock:addDivider()
+    uiBlock:addSlider("Batas Minimum Restock", 10, 100, CFG.restock_threshold, 5, false, "as_in_restock_thresh")
+
+    -- Tab 5: Desain & Layout
+    local uiLayout = createNativeUI("5. Desain & Layout", "Build")
     uiLayout:addLabelApp("Pengaturan Tata Letak Farm", "Build")
     uiLayout:addLabel("Spesifikasi Block Material:")
     uiLayout:addInputInt("ID Block Material", tostring(CFG.block_id), "ID Item", "8772 (Soil) / 2 (Dirt) / 102 (Plat)", "Tag", "as_in_block_id")
@@ -2251,8 +2465,8 @@ local function registerNativeSoilUI()
     uiLayout:addSlider("Delay Pergerakan (ms)", 80, 500, CFG.delay_walk, 10, false, "as_in_delay_walk")
     uiLayout:addSlider("Delay Pukulan (ms)", 80, 400, CFG.delay_punch, 10, false, "as_in_delay_punch")
 
-    -- Tab 5: Konsol & Log
-    local uiConsole = createNativeUI("5. Konsol & Log", "Terminal")
+    -- Tab 6: Konsol & Log
+    local uiConsole = createNativeUI("6. Konsol & Log", "Terminal")
     uiConsole:addLabelApp("Konsol Aktivitas Sistem", "Terminal")
     uiConsole:addDisplayList("Status Operasi Sistem", "Default", "as_power_status_list")
     uiConsole:addDivider()
@@ -2263,7 +2477,8 @@ local function registerNativeSoilUI()
     pcall(addCategory, "Boren Farm", "Grass")
     pcall(addIntoModule, uiWorld:generateJSON(), "Boren Farm")
     pcall(addIntoModule, uiLock:generateJSON(), "Boren Farm")
-    pcall(addIntoModule, uiStorage:generateJSON(), "Boren Farm")
+    pcall(addIntoModule, uiTool:generateJSON(), "Boren Farm")
+    pcall(addIntoModule, uiBlock:generateJSON(), "Boren Farm")
     pcall(addIntoModule, uiLayout:generateJSON(), "Boren Farm")
     pcall(addIntoModule, uiConsole:generateJSON(), "Boren Farm")
 end
@@ -2271,242 +2486,201 @@ end
 -- ============================================================================
 -- 17. EVENT DISPATCHERS & VALUE HANDLERS
 -- ============================================================================
-local function toBoolVal(v)
-    return (v == true or v == 1 or v == "true" or v == "1")
+local function readGLString(alias, defaultVal)
+    if not getValue then return defaultVal end
+    local ok, res = pcall(getValue, alias)
+    if ok and res ~= nil and tostring(res) ~= "" then
+        return tostring(res)
+    end
+    return defaultVal
 end
 
-local function readGLString(alias, fallback)
-    if getValue then
-        for _, vtype in ipairs({ 2, 5, 0, 1 }) do
-            local ok, val = pcall(getValue, vtype, alias)
-            if ok and type(val) == "string" and val ~= "" then
-                return val
-            end
-        end
-    end
-    return fallback
-end
-
-local function handleSoilUIValue(vtype, name, value)
-    -- Shift argumen jika GrowLauncher memanggil onValue(alias, value) atau alias ada di vtype
-    if type(vtype) == "string" and (name == nil or type(name) ~= "string" or (type(name) == "string" and vtype:sub(1, 3) == "as_")) then
-        value = name
-        name = vtype
-        vtype = 0
-    end
-    name = tostring(name or "")
-    if name == "" then return end
-
-    local now = os.clock()
-    local isButton = (name:sub(1, 7) == "as_btn_")
-    if isButton then
-        if STATE.last_btn_time and STATE.last_btn_time[name] and (now - STATE.last_btn_time[name]) < 0.25 then
-            return
-        end
-        if not STATE.last_btn_time then STATE.last_btn_time = {} end
-        STATE.last_btn_time[name] = now
-    end
-
+local function OnValue(index, name, value)
     if name == "as_run_power" then
-        local state = toBoolVal(value)
-        if state and not STATE.running then
+        if value == true or value == 1 or value == "1" then
             startSoilBot()
-        elseif not state and STATE.running then
+        else
             stopSoilBot()
         end
-    elseif name == "as_pause_toggle" then
-        STATE.paused = toBoolVal(value)
-        addLog(STATE.paused and "`e[Jeda] `0Bot dijeda sementara." or "`2[Lanjut] `0Bot dilanjutkan.")
-        updatePowerStatusList()
     elseif name == "as_btn_stop" then
         stopSoilBot()
-    elseif name == "as_chk_mode_random" then
-        CFG.world_mode = toBoolVal(value) and "RANDOM" or "MANUAL"
-        savePrefs(CFG)
-    elseif name == "as_in_rnd_len" then
-        CFG.random_letter_count = tonumber(value) or CFG.random_letter_count
-        savePrefs(CFG)
-    elseif name == "as_chk_rnd_num" then
-        CFG.random_with_number = toBoolVal(value)
-        savePrefs(CFG)
-    elseif name == "as_in_rnd_prefix" then
-        CFG.random_prefix = tostring(value or "")
-        savePrefs(CFG)
-    elseif name == "as_in_rnd_target" then
-        CFG.random_target_count = tonumber(value) or CFG.random_target_count
-        savePrefs(CFG)
-    elseif name == "as_chk_auto_blast" then
-        CFG.auto_use_blast = toBoolVal(value)
-        savePrefs(CFG)
-    elseif name == "as_in_blast_id" then
-        CFG.blast_item_id = tonumber(value) or CFG.blast_item_id
-        savePrefs(CFG)
+        if editValue then pcall(editValue, "as_run_power", false) end
+    elseif name == "as_pause_toggle" then
+        togglePauseSoilBot()
     elseif name == "as_input_add_world" then
-        STATE.buf_new_world = tostring(value or ""):upper():match("^%s*(.-)%s*$")
+        STATE.buf_new_world = tostring(value or "")
     elseif name == "as_input_add_door" then
-        STATE.buf_new_door = tostring(value or ""):upper():match("^%s*(.-)%s*$")
+        STATE.buf_new_door = tostring(value or "")
     elseif name == "as_btn_add_world" then
-        local wIn = readGLString("as_input_add_world", STATE.buf_new_world or "")
-        local dIn = readGLString("as_input_add_door", STATE.buf_new_door or "")
-        wIn = tostring(wIn or ""):gsub("%s+", ""):upper()
-        dIn = tostring(dIn or ""):gsub("^%s+", ""):gsub("%s+$", "")
-        if wIn ~= "" then
-            table.insert(CFG.farm_world_list, { name = wIn, door = dIn, done = false })
+        local nw = readGLString("as_input_add_world", STATE.buf_new_world)
+        local nd = readGLString("as_input_add_door", STATE.buf_new_door)
+        nw = nw:gsub("%s+", ""):upper()
+        nd = nd:gsub("^%s+", ""):gsub("%s+$", "")
+        if nw ~= "" then
+            table.insert(CFG.farm_world_list, { name = nw, door = nd, done = false })
             savePrefs(CFG)
             saveWorldsToFile()
             updateWorldDisplayList()
-            addLog("`2[Tambah World] `w" .. wIn .. ((dIn ~= "") and (" (Door: " .. dIn .. ")") or "") .. " ditambahkan.")
-            notifyUser("World " .. wIn .. " ditambahkan!")
-            STATE.buf_new_world = ""
-            STATE.buf_new_door = ""
-            if editValue then
-                pcall(editValue, "as_input_add_world", "")
-                pcall(editValue, "as_input_add_door", "")
-            end
+            notifyUser(string.format("World Put %s berhasil ditambahkan!", nw))
+            addLog(string.format("`2[Tambah World] `w%s [Door: %s] masuk ke antrean world put.", nw, (nd ~= "" and nd or "-")))
         else
-            notifyUser("Isi nama world terlebih dahulu!")
-            addLog("`4[Peringatan] `oNama world tidak boleh kosong!")
+            notifyUser("Nama world put tidak boleh kosong!")
         end
     elseif name == "as_btn_add_cur_world" then
         local curW = getWorldNameSafe()
-        if curW == "" or curW == "EXIT" then
-            addLog("`4[Gagal] `oKarakter belum masuk ke dalam world.")
-            notifyUser("Karakter belum masuk ke dalam world.")
-            return
-        end
-        local exists = false
-        for _, w in ipairs(CFG.farm_world_list) do
-            if (w.name or ""):upper() == curW:upper() then
-                exists = true
-                break
-            end
-        end
-        if exists then
-            addLog("`e[Info] `0World " .. curW .. " sudah ada di antrean.")
-            notifyUser("World " .. curW .. " sudah ada di antrean.")
-        else
-            local doorVal = (STATE.buf_new_door and STATE.buf_new_door ~= "") and STATE.buf_new_door or CFG.farm_door_id
-            table.insert(CFG.farm_world_list, { name = curW, door = doorVal, done = false })
+        if curW ~= "" and curW ~= "EXIT" then
+            local nd = readGLString("as_input_add_door", STATE.buf_new_door)
+            nd = nd:gsub("^%s+", ""):gsub("%s+$", "")
+            table.insert(CFG.farm_world_list, { name = curW, door = nd, done = false })
             savePrefs(CFG)
             saveWorldsToFile()
             updateWorldDisplayList()
-            addLog("`2[Sukses] `wWorld sekarang: " .. curW .. " ditambahkan ke antrean!")
-            notifyUser("World " .. curW .. " ditambahkan!")
+            notifyUser(string.format("World aktif %s berhasil ditambahkan ke World Put!", curW))
+            addLog(string.format("`2[World Aktif] `w%s otomatis masuk ke antrean world put.", curW))
+        else
+            notifyUser("Anda sedang berada di luar world (EXIT / Loading)!")
         end
     elseif name == "as_btn_clear_worlds" then
         CFG.farm_world_list = {}
         savePrefs(CFG)
         saveWorldsToFile()
         updateWorldDisplayList()
-        addLog("`4[Bersihkan World] `oAntrean world dikosongkan.")
-        notifyUser("Antrean world dikosongkan!")
+        notifyUser("Daftar antrean world put dikosongkan!")
+        addLog("`4[Kosongkan World] `oDaftar world put berhasil dikosongkan.")
     elseif name == "as_btn_manage_worlds" then
         openUnifiedWorldManager()
     elseif name == "as_btn_save_worlds" then
         saveWorldsToFile()
     elseif name == "as_btn_load_worlds" then
         loadWorldsFromFile()
+
+    -- TAB 2: Proteksi & Kunci
     elseif name == "as_chk_enable_lock" then
-        CFG.enable_lock_enclosure = toBoolVal(value)
+        CFG.enable_lock_enclosure = (value == true or value == 1 or value == "1")
         savePrefs(CFG)
+        addLog(CFG.enable_lock_enclosure and "`2[Proteksi Kunci] `wFitur diaktifkan." or "`e[Proteksi Kunci] `0Fitur dinonaktifkan.")
     elseif name == "as_in_id_wl" then
         CFG.lock_id_wl = tonumber(value) or CFG.lock_id_wl
+    elseif name == "as_chk_wl_public" then
+        CFG.wl_make_public = (value == true or value == 1 or value == "1")
     elseif name == "as_in_id_sl" then
         CFG.lock_id_sl = tonumber(value) or CFG.lock_id_sl
     elseif name == "as_in_id_jammer" then
         CFG.lock_id_jammer = tonumber(value) or CFG.lock_id_jammer
-    elseif name == "as_in_id_blocker" then
-        CFG.lock_id_blocker = tonumber(value) or CFG.lock_id_blocker
     elseif name == "as_in_id_door" then
         CFG.lock_id_door = tonumber(value) or CFG.lock_id_door
     elseif name == "as_in_door_label" then
         CFG.farm_door_id = tostring(value or "")
-    elseif name == "as_chk_wl_public" then
-        CFG.wl_make_public = toBoolVal(value)
     elseif name == "as_btn_save_lock_cfg" then
-        local wlIn = tonumber(readGLString("as_in_id_wl", tostring(CFG.lock_id_wl)))
-        if wlIn and wlIn > 0 then CFG.lock_id_wl = wlIn end
-        local slIn = tonumber(readGLString("as_in_id_sl", tostring(CFG.lock_id_sl)))
-        if slIn and slIn > 0 then CFG.lock_id_sl = slIn end
-        local jamIn = tonumber(readGLString("as_in_id_jammer", tostring(CFG.lock_id_jammer)))
-        if jamIn and jamIn > 0 then CFG.lock_id_jammer = jamIn end
-        local blkIn = tonumber(readGLString("as_in_id_blocker", tostring(CFG.lock_id_blocker)))
-        if blkIn and blkIn > 0 then CFG.lock_id_blocker = blkIn end
-        local drIn = tonumber(readGLString("as_in_id_door", tostring(CFG.lock_id_door)))
-        if drIn and drIn > 0 then CFG.lock_id_door = drIn end
-        local lblIn = readGLString("as_in_door_label", CFG.farm_door_id)
-        if lblIn then CFG.farm_door_id = lblIn end
+        CFG.lock_id_wl     = tonumber(readGLString("as_in_id_wl", tostring(CFG.lock_id_wl))) or CFG.lock_id_wl
+        CFG.lock_id_sl     = tonumber(readGLString("as_in_id_sl", tostring(CFG.lock_id_sl))) or CFG.lock_id_sl
+        CFG.lock_id_jammer = tonumber(readGLString("as_in_id_jammer", tostring(CFG.lock_id_jammer))) or CFG.lock_id_jammer
+        CFG.lock_id_door   = tonumber(readGLString("as_in_id_door", tostring(CFG.lock_id_door))) or CFG.lock_id_door
+        CFG.farm_door_id   = readGLString("as_in_door_label", CFG.farm_door_id)
         savePrefs(CFG)
-        notifyUser("Pengaturan proteksi berhasil disimpan!")
-        addLog("`2[Simpan Proteksi] `wKonfigurasi proteksi kunci berhasil disimpan.")
-    elseif name == "as_input_add_stor" then
-        STATE.buf_new_stor = tostring(value or ""):upper():match("^%s*(.-)%s*$")
-    elseif name == "as_input_add_stor_door" then
-        STATE.buf_new_stor_door = tostring(value or ""):upper():match("^%s*(.-)%s*$")
-    elseif name == "as_btn_add_stor_direct" then
-        local sIn = readGLString("as_input_add_stor", STATE.buf_new_stor or "")
-        local dIn = readGLString("as_input_add_stor_door", STATE.buf_new_stor_door or "")
-        sIn = tostring(sIn or ""):gsub("%s+", ""):upper()
-        dIn = tostring(dIn or ""):gsub("^%s+", ""):gsub("%s+$", "")
-        if sIn ~= "" then
-            table.insert(CFG.storage_list, { name = sIn, door = dIn })
+        notifyUser("Konfigurasi Proteksi Tersimpan!")
+        addLog("`2[Simpan Proteksi] `wKonfigurasi kunci pintu (WL, SL, Jammer, Door di 0,0) berhasil disimpan.")
+
+    -- TAB 3: Gudang Alat
+    elseif name == "as_input_add_tool" then
+        STATE.buf_new_tool = tostring(value or "")
+    elseif name == "as_input_add_tool_door" then
+        STATE.buf_new_tool_door = tostring(value or "")
+    elseif name == "as_btn_add_tool_direct" then
+        local ns = readGLString("as_input_add_tool", STATE.buf_new_tool)
+        local nd = readGLString("as_input_add_tool_door", STATE.buf_new_tool_door)
+        ns = ns:gsub("%s+", ""):upper()
+        nd = nd:gsub("^%s+", ""):gsub("%s+$", "")
+        if ns ~= "" then
+            table.insert(CFG.storage_tool_list, { name = ns, door = nd })
             savePrefs(CFG)
-            saveStoragesToFile()
-            updateStorageDisplayList()
-            addLog("`2[Tambah Gudang] `w" .. sIn .. ((dIn ~= "") and (" (Door: " .. dIn .. ")") or "") .. " ditambahkan.")
-            notifyUser("Gudang " .. sIn .. " ditambahkan!")
-            STATE.buf_new_stor = ""
-            STATE.buf_new_door = ""
-            if editValue then
-                pcall(editValue, "as_input_add_stor", "")
-                pcall(editValue, "as_input_add_stor_door", "")
-            end
+            saveToolsToFile()
+            updateToolDisplayList()
+            notifyUser(string.format("Gudang Alat %s ditambahkan!", ns))
+            addLog(string.format("`2[Gudang Alat] `w%s [Door: %s] berhasil didaftarkan.", ns, (nd ~= "" and nd or "-")))
         else
-            notifyUser("Isi nama gudang terlebih dahulu!")
-            addLog("`4[Peringatan] `oNama gudang tidak boleh kosong!")
+            notifyUser("Nama world gudang alat tidak boleh kosong!")
         end
-    elseif name == "as_btn_add_cur_stor" then
+    elseif name == "as_btn_add_cur_tool" then
         local curW = getWorldNameSafe()
-        if curW == "" or curW == "EXIT" then
-            addLog("`4[Gagal] `oKarakter belum masuk ke dalam world.")
-            notifyUser("Karakter belum masuk ke dalam world.")
-            return
-        end
-        local exists = false
-        for _, s in ipairs(CFG.storage_list) do
-            if (s.name or ""):upper() == curW:upper() then
-                exists = true
-                break
-            end
-        end
-        if exists then
-            addLog("`e[Info] `0Gudang " .. curW .. " sudah ada di daftar.")
-            notifyUser("Gudang " .. curW .. " sudah ada di daftar.")
-        else
-            local dVal = (STATE.buf_new_stor_door and STATE.buf_new_stor_door ~= "") and STATE.buf_new_stor_door or CFG.storage_door_default
-            table.insert(CFG.storage_list, { name = curW, door = dVal })
+        if curW ~= "" and curW ~= "EXIT" then
+            local nd = readGLString("as_input_add_tool_door", STATE.buf_new_tool_door)
+            nd = nd:gsub("^%s+", ""):gsub("%s+$", "")
+            table.insert(CFG.storage_tool_list, { name = curW, door = nd })
             savePrefs(CFG)
-            saveStoragesToFile()
-            updateStorageDisplayList()
-            addLog("`2[Sukses] `wGudang sekarang: " .. curW .. " ditambahkan ke daftar!")
-            notifyUser("Gudang " .. curW .. " ditambahkan!")
+            saveToolsToFile()
+            updateToolDisplayList()
+            notifyUser(string.format("World aktif %s masuk ke Gudang Alat!", curW))
+            addLog(string.format("`2[Gudang Alat] `w%s otomatis masuk ke Gudang Alat.", curW))
+        else
+            notifyUser("Anda sedang berada di luar world (EXIT / Loading)!")
         end
-    elseif name == "as_btn_clear_stor_direct" then
-        CFG.storage_list = {}
+    elseif name == "as_btn_clear_tool_direct" then
+        CFG.storage_tool_list = {}
         savePrefs(CFG)
-        saveStoragesToFile()
-        updateStorageDisplayList()
-        addLog("`4[Bersihkan Gudang] `oDaftar gudang dikosongkan.")
-        notifyUser("Daftar gudang dikosongkan!")
-    elseif name == "as_btn_manage_storages" then
-        openUnifiedStorageManager()
-    elseif name == "as_btn_save_storages" then
-        saveStoragesToFile()
-    elseif name == "as_btn_load_storages" then
-        loadStoragesFromFile()
+        saveToolsToFile()
+        updateToolDisplayList()
+        notifyUser("Daftar gudang alat dikosongkan!")
+        addLog("`4[Kosongkan Alat] `oDaftar gudang alat dikosongkan.")
+    elseif name == "as_btn_manage_tools" then
+        openUnifiedToolManager()
+    elseif name == "as_btn_save_tools" then
+        saveToolsToFile()
+    elseif name == "as_btn_load_tools" then
+        loadToolsFromFile()
+
+    -- TAB 4: Gudang Block
+    elseif name == "as_input_add_block" then
+        STATE.buf_new_block = tostring(value or "")
+    elseif name == "as_input_add_block_door" then
+        STATE.buf_new_block_door = tostring(value or "")
+    elseif name == "as_btn_add_block_direct" then
+        local ns = readGLString("as_input_add_block", STATE.buf_new_block)
+        local nd = readGLString("as_input_add_block_door", STATE.buf_new_block_door)
+        ns = ns:gsub("%s+", ""):upper()
+        nd = nd:gsub("^%s+", ""):gsub("%s+$", "")
+        if ns ~= "" then
+            table.insert(CFG.storage_block_list, { name = ns, door = nd })
+            savePrefs(CFG)
+            saveBlocksToFile()
+            updateBlockDisplayList()
+            notifyUser(string.format("Gudang Block %s ditambahkan!", ns))
+            addLog(string.format("`2[Gudang Block] `w%s [Door: %s] berhasil didaftarkan.", ns, (nd ~= "" and nd or "-")))
+        else
+            notifyUser("Nama world gudang block tidak boleh kosong!")
+        end
+    elseif name == "as_btn_add_cur_block" then
+        local curW = getWorldNameSafe()
+        if curW ~= "" and curW ~= "EXIT" then
+            local nd = readGLString("as_input_add_block_door", STATE.buf_new_block_door)
+            nd = nd:gsub("^%s+", ""):gsub("%s+$", "")
+            table.insert(CFG.storage_block_list, { name = curW, door = nd })
+            savePrefs(CFG)
+            saveBlocksToFile()
+            updateBlockDisplayList()
+            notifyUser(string.format("World aktif %s masuk ke Gudang Block!", curW))
+            addLog(string.format("`2[Gudang Block] `w%s otomatis masuk ke Gudang Block.", curW))
+        else
+            notifyUser("Anda sedang berada di luar world (EXIT / Loading)!")
+        end
+    elseif name == "as_btn_clear_block_direct" then
+        CFG.storage_block_list = {}
+        savePrefs(CFG)
+        saveBlocksToFile()
+        updateBlockDisplayList()
+        notifyUser("Daftar gudang block dikosongkan!")
+        addLog("`4[Kosongkan Block] `oDaftar gudang block dikosongkan.")
+    elseif name == "as_btn_manage_blocks" then
+        openUnifiedBlockManager()
+    elseif name == "as_btn_save_blocks" then
+        saveBlocksToFile()
+    elseif name == "as_btn_load_blocks" then
+        loadBlocksFromFile()
     elseif name == "as_in_restock_thresh" then
         CFG.restock_threshold = tonumber(value) or CFG.restock_threshold
         savePrefs(CFG)
+
+    -- TAB 5: Desain & Layout
     elseif name == "as_in_block_id" then
         CFG.block_id = tonumber(value) or CFG.block_id
     elseif name == "as_btn_save_block_id" then
@@ -2516,6 +2690,7 @@ local function handleSoilUIValue(vtype, name, value)
         notifyUser(string.format("ID Block %d (%s) tersimpan!", CFG.block_id, getItemNameSafe(CFG.block_id)))
         addLog(string.format("`2[Simpan Block] `wID Block disetel ke %d (%s)", CFG.block_id, getItemNameSafe(CFG.block_id)))
         updatePowerStatusList()
+        updateBlockDisplayList()
     elseif name == "as_in_row_step" then
         CFG.row_step = tonumber(value) or CFG.row_step
         savePrefs(CFG)
@@ -2531,12 +2706,17 @@ local function handleSoilUIValue(vtype, name, value)
     elseif name == "as_in_end_x" then
         CFG.row_end_x = tonumber(value) or CFG.row_end_x
         savePrefs(CFG)
+    elseif name == "as_chk_modfly" then
+        CFG.use_modfly = (value == true or value == 1 or value == "1")
+        applyCheatToggles()
+    elseif name == "as_chk_anti_lava" then
+        CFG.use_anti_lava = (value == true or value == 1 or value == "1")
+        applyCheatToggles()
     elseif name == "as_chk_enable_water" then
-        CFG.enable_water_column = toBoolVal(value)
+        CFG.enable_water_column = (value == true or value == 1 or value == "1")
         savePrefs(CFG)
     elseif name == "as_in_water_id" then
-        local wIdIn = tonumber(readGLString("as_in_water_id", tostring(CFG.water_item_id)))
-        if wIdIn and wIdIn > 0 then CFG.water_item_id = wIdIn end
+        CFG.water_item_id = tonumber(value) or CFG.water_item_id
         savePrefs(CFG)
     elseif name == "as_in_water_x" then
         CFG.water_x = tonumber(value) or CFG.water_x
@@ -2550,39 +2730,25 @@ local function handleSoilUIValue(vtype, name, value)
     elseif name == "as_in_delay_punch" then
         CFG.delay_punch = tonumber(value) or CFG.delay_punch
         savePrefs(CFG)
+
+    -- TAB 6: Konsol & Log
     elseif name == "as_btn_clear_log" then
         STATE.log_messages = {}
         updateLogDisplayList()
-    elseif name == "as_chk_modfly" then
-        CFG.use_modfly = toBoolVal(value)
-        savePrefs(CFG)
-        applyCheatToggles()
-    elseif name == "as_chk_anti_lava" then
-        CFG.use_anti_lava = toBoolVal(value)
-        savePrefs(CFG)
-        applyCheatToggles()
+        notifyUser("Riwayat log dibersihkan!")
     end
 end
 
--- Export OnValue & onSendPacket ke namespace global
-function OnValue(typeVal, name, val)
-    pcall(handleSoilUIValue, typeVal, name, val)
-end
-onValue = OnValue
-
-onSendPacket = onSendPacketDialogHook
-OnSendPacket = onSendPacketDialogHook
-
--- Daftarkan setOnValue per-alias jika didukung GrowLauncher
+-- ============================================================================
+-- GLOBAL LISTENER BINDINGS
+-- ============================================================================
 local ALL_UI_ALIASES = {
-    "as_run_power", "as_pause_toggle", "as_btn_stop",
-    "as_chk_mode_random", "as_in_rnd_len", "as_chk_rnd_num", "as_in_rnd_prefix", "as_in_rnd_target",
-    "as_chk_auto_blast", "as_in_blast_id",
+    "as_run_power", "as_btn_stop", "as_pause_toggle",
     "as_input_add_world", "as_input_add_door", "as_btn_add_world", "as_btn_add_cur_world", "as_btn_manage_worlds", "as_btn_clear_worlds",
-    "as_btn_save_worlds", "as_btn_load_worlds",
-    "as_chk_enable_lock", "as_in_id_wl", "as_chk_wl_public", "as_in_id_sl", "as_in_id_jammer", "as_in_id_blocker", "as_in_id_door", "as_in_door_label", "as_btn_save_lock_cfg",
-    "as_input_add_stor", "as_input_add_stor_door", "as_btn_add_stor_direct", "as_btn_add_cur_stor", "as_btn_manage_storages", "as_btn_clear_stor_direct",
-    "as_btn_save_storages", "as_btn_load_storages", "as_in_restock_thresh",
+    "as_btn_save_worlds", "as_btn_load_worlds", "as_chk_mode_random", "as_in_rnd_len", "as_chk_rnd_num", "as_in_rnd_prefix", "as_in_rnd_target", "as_chk_auto_blast", "as_in_blast_id",
+    "as_chk_enable_lock", "as_in_id_wl", "as_chk_wl_public", "as_in_id_sl", "as_in_id_jammer", "as_in_id_door", "as_in_door_label", "as_btn_save_lock_cfg",
+    "as_input_add_tool", "as_input_add_tool_door", "as_btn_add_tool_direct", "as_btn_add_cur_tool", "as_btn_manage_tools", "as_btn_clear_tool_direct", "as_btn_save_tools", "as_btn_load_tools",
+    "as_input_add_block", "as_input_add_block_door", "as_btn_add_block_direct", "as_btn_add_cur_block", "as_btn_manage_blocks", "as_btn_clear_block_direct", "as_btn_save_blocks", "as_btn_load_blocks", "as_in_restock_thresh",
     "as_in_block_id", "as_btn_save_block_id", "as_chk_modfly", "as_chk_anti_lava", "as_in_row_step", "as_in_start_y", "as_in_end_y", "as_in_start_x", "as_in_end_x",
     "as_chk_enable_water", "as_in_water_id", "as_in_water_x",
     "as_in_delay_place", "as_in_delay_walk", "as_in_delay_punch", "as_btn_clear_log"
@@ -2602,26 +2768,21 @@ if setOnValue then
     end
 end
 
-if addHook then
-    pcall(addHook, onValue, "onvalue")
-    pcall(addHook, onSendPacketDialogHook, "onsendpacket")
-end
-if applyHook then
-    pcall(applyHook)
-end
+-- ============================================================================
+-- 18. SYSTEM INITIALIZATION & REGISTRATION
+-- ============================================================================
+pcall(function()
+    loadWorldsFromFile()
+    loadToolsFromFile()
+    loadBlocksFromFile()
+    registerNativeSoilUI()
+    applyCheatToggles()
+    updatePowerStatusList()
+    updateWorldDisplayList()
+    updateToolDisplayList()
+    updateBlockDisplayList()
+    updateLogDisplayList()
+end)
 
--- Variant Hook jika versi GL memakai addEvent
-if addEvent and Event and Event.variantlist then
-    pcall(addEvent, Event.variantlist, function(var)
-        -- Fallback variant
-    end)
-end
-
--- Inisialisasi awal UI Native GrowLauncher
-pcall(registerNativeSoilUI)
-safeSleep(200)
-pcall(updatePowerStatusList)
-pcall(updateWorldDisplayList)
-pcall(updateStorageDisplayList)
-pcall(updateLogDisplayList)
-addLog("`2[Boren Store] `wAuto Soil & Block Builder siap digunakan!")
+addLog("`2[Sistem Siap] `wAuto Soil Builder V2.3.0 Resmi Dimuat.")
+notifyUser("Auto Soil Builder Siap!")
