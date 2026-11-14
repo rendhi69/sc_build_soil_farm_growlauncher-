@@ -11,7 +11,7 @@
 -- 1. IDENTITAS SISTEM & METADATA
 -- ============================================================================
 local SCRIPT_NAME    = "Auto Soil Builder"
-local SCRIPT_VERSION = "2.3.0"
+local SCRIPT_VERSION = "2.3.1"
 local SCRIPT_BUILD   = "2026.11.15-PRO"
 local SCRIPT_AUTHOR  = "Boren Store"
 
@@ -541,7 +541,6 @@ local function loadWorldsFromFile()
     local fh = io.open(path, "r")
     if not fh then fh = io.open("/sdcard/Download/" .. fn, "r") end
     if not fh then
-        addLog("`4[Gagal Muat] `oFile " .. fn .. " tidak ditemukan di Download.")
         return false
     end
 
@@ -564,7 +563,6 @@ local function loadWorldsFromFile()
     fh:close()
     savePrefs(CFG)
     addLog(string.format("`2[Berhasil Muat] `w%d world put dari %s", count, path))
-    notifyUser(string.format("Berhasil muat %d world put", count))
     updateWorldDisplayList()
     return true
 end
@@ -593,7 +591,6 @@ local function loadToolsFromFile()
     local fh = io.open(path, "r")
     if not fh then fh = io.open("/sdcard/Download/" .. fn, "r") end
     if not fh then
-        addLog("`4[Gagal Muat] `oFile " .. fn .. " tidak ditemukan di Download.")
         return false
     end
 
@@ -615,7 +612,6 @@ local function loadToolsFromFile()
     fh:close()
     savePrefs(CFG)
     addLog(string.format("`2[Berhasil Muat] `w%d gudang alat dari %s", count, path))
-    notifyUser(string.format("Berhasil muat %d gudang alat", count))
     updateToolDisplayList()
     return true
 end
@@ -644,7 +640,6 @@ local function loadBlocksFromFile()
     local fh = io.open(path, "r")
     if not fh then fh = io.open("/sdcard/Download/" .. fn, "r") end
     if not fh then
-        addLog("`4[Gagal Muat] `oFile " .. fn .. " tidak ditemukan di Download.")
         return false
     end
 
@@ -666,7 +661,6 @@ local function loadBlocksFromFile()
     fh:close()
     savePrefs(CFG)
     addLog(string.format("`2[Berhasil Muat] `w%d gudang block dari %s", count, path))
-    notifyUser(string.format("Berhasil muat %d gudang block", count))
     updateBlockDisplayList()
     return true
 end
@@ -2300,64 +2294,119 @@ end
 -- ============================================================================
 -- 16. NATIVE GROWLAUNCHER UI BUILDER (6 PROFESSIONAL TABS)
 -- ============================================================================
-local function createNativeUI(moduleName, iconName)
-    local ui = {
-        name = moduleName,
-        icon = iconName or "Build",
-        components = {}
-    }
-    function ui:addLabelApp(title, icon)
-        table.insert(self.components, { type = "label_app", text = title, icon = icon or "Build" })
+-- Helper UI Builder: memakai UserInterface.new() bawaan GrowLauncher atau fallback JSON resmi
+local function createNativeUI(subName, iconName)
+    if UserInterface and UserInterface.new then
+        local ok, res = pcall(UserInterface.new, subName, iconName)
+        if ok and res then return res end
     end
+
+    local ui = { sub_name = subName, icon = iconName, menu = {} }
+
+    function ui:addLabelApp(text, icon)
+        table.insert(self.menu, { type = "labelapp", text = text, icon = icon or "" })
+        return self
+    end
+
     function ui:addLabel(text)
-        table.insert(self.components, { type = "label", text = text })
+        table.insert(self.menu, { type = "label", text = text })
+        return self
     end
-    function ui:addButton(title, alias)
-        table.insert(self.components, { type = "button", title = title, alias = alias })
-    end
-    function ui:addToggleButton(title, state, alias)
-        table.insert(self.components, { type = "toggle_button", title = title, state = state, alias = alias })
-    end
-    function ui:addToggle(title, state, alias, isCheckbox)
-        table.insert(self.components, { type = "toggle", title = title, state = state, alias = alias, checkbox = isCheckbox or false })
-    end
-    function ui:addSlider(title, min, max, value, step, isFloat, alias)
-        table.insert(self.components, { type = "slider", title = title, min = min, max = max, value = value, step = step or 1, float = isFloat or false, alias = alias })
-    end
-    function ui:addInputString(title, value, placeholder, hint, icon, alias)
-        table.insert(self.components, { type = "input_string", title = title, value = value or "", placeholder = placeholder or "", hint = hint or "", icon = icon or "Edit", alias = alias })
-    end
-    function ui:addInputInt(title, value, placeholder, hint, icon, alias)
-        table.insert(self.components, { type = "input_int", title = title, value = value or "0", placeholder = placeholder or "", hint = hint or "", icon = icon or "FormatListNumbered", alias = alias })
-    end
-    function ui:addDisplayList(title, style, alias)
-        table.insert(self.components, { type = "display_list", title = title, style = style or "Default", alias = alias })
-    end
+
     function ui:addDivider()
-        table.insert(self.components, { type = "divider" })
+        table.insert(self.menu, { type = "divider" })
+        return self
     end
-    function ui:addTooltip(title, desc, icon, defaultOpen)
-        table.insert(self.components, { type = "tooltip", title = title, desc = desc, icon = icon or "Info", open = defaultOpen or false })
+
+    function ui:addToggle(text, default, alias, autosave)
+        table.insert(self.menu, { type = "toggle", text = text, default = (default == true or default == 1 or default == "1"), alias = alias, autosave = (autosave == true) })
+        return self
     end
+
+    function ui:addToggleButton(text, default, alias)
+        table.insert(self.menu, { type = "toggle_button", text = text, default = (default == true or default == 1 or default == "1"), alias = alias })
+        return self
+    end
+
+    function ui:addButton(text, alias)
+        table.insert(self.menu, { type = "button", text = text, alias = alias })
+        return self
+    end
+
+    function ui:addInputString(text, default, label, placeholder, icon, alias)
+        table.insert(self.menu, { type = "input_string", text = text, default = tostring(default or ""), label = label or "Text", placeholder = placeholder or "", icon = icon or "", alias = alias })
+        return self
+    end
+
+    function ui:addInputInt(text, default, label, placeholder, icon, alias)
+        table.insert(self.menu, { type = "input_int", text = text, default = tostring(default or "0"), label = label or "Value", placeholder = placeholder or "0", icon = icon or "", alias = alias })
+        return self
+    end
+
+    function ui:addSlider(text, minVal, maxVal, defaultVal, stepVal, useDot, alias)
+        table.insert(self.menu, { type = "slider", text = text, min = tonumber(minVal) or 0, max = tonumber(maxVal) or 100, default = tonumber(defaultVal) or 0, step = tonumber(stepVal) or 1, use_dot = (useDot == true), alias = alias })
+        return self
+    end
+
+    function ui:addTooltip(text, supportText, icon, background)
+        table.insert(self.menu, { type = "tooltip", text = text, support_text = supportText or "", icon = icon or "Info", background = (background == true) })
+        return self
+    end
+
+    function ui:addItemPicker(text, item, default, alias)
+        table.insert(self.menu, { type = "item_picker", text = text, item = item or "Blank", default = tostring(default or "0"), alias = alias })
+        return self
+    end
+
+    function ui:addDisplayList(text, default, alias)
+        table.insert(self.menu, { type = "display_list", text = text, default = default or "Default", alias = alias })
+        return self
+    end
+
     function ui:generateJSON()
-        return jsonEncode({
-            name = self.name,
-            icon = self.icon,
-            components = self.components
-        })
+        return jsonEncode({ sub_name = self.sub_name, icon = self.icon, menu = self.menu })
     end
+
     return ui
+end
+
+local function addSubModule(uiObj, catName)
+    catName = catName or "Boren Farm"
+    if not addIntoModule then return end
+    local jsonStr = ""
+    if type(uiObj) == "string" then
+        jsonStr = uiObj
+    elseif type(uiObj) == "table" or type(uiObj) == "userdata" then
+        if uiObj.generateJSON then
+            local okG, resG = pcall(uiObj.generateJSON, uiObj)
+            if okG and resG then jsonStr = resG end
+        end
+    end
+
+    if jsonStr and jsonStr ~= "" then
+        local okM, errM = pcall(addIntoModule, jsonStr, catName)
+        if not okM and LogToConsole then
+            pcall(LogToConsole, "`4[UI Error] addIntoModule gagal: " .. tostring(errM))
+        end
+    elseif uiObj then
+        pcall(addIntoModule, uiObj, catName)
+    end
 end
 
 local function registerNativeSoilUI()
     if not addCategory or not addIntoModule then
-        addLog("`4[UI Warning] `oFungsi addCategory / addIntoModule tidak terdeteksi.")
+        local warn = "Fungsi addCategory / addIntoModule tidak terdeteksi di runtime ini."
+        addLog("`4[UI Warning] `o" .. warn)
+        if LogToConsole then pcall(LogToConsole, "`4[UI Warning] `0" .. warn) end
         return
     end
 
+    -- Daftarkan kategori utama "Boren Farm"
+    pcall(addCategory, "Boren Farm", "Spa")
+
     -- Tab 1: Dashboard & World Put
     local uiWorld = createNativeUI("1. Dashboard & World Put", "PlayArrow")
-    uiWorld:addLabelApp("Boren Farm Builder", "Grass")
+    uiWorld:addLabelApp("Boren Farm Builder", "Spa")
     uiWorld:addToggleButton("▶ Mulai Bot", false, "as_run_power")
     uiWorld:addButton("■ Hentikan Bot", "as_btn_stop")
     uiWorld:addToggle("Jeda Bot", false, "as_pause_toggle", false)
@@ -2405,10 +2454,10 @@ local function registerNativeSoilUI()
     uiLock:addButton("💾 Simpan Konfigurasi Proteksi", "as_btn_save_lock_cfg")
 
     -- Tab 3: Gudang Alat
-    local uiTool = createNativeUI("3. Gudang Alat", "Construction")
-    uiTool:addLabelApp("Gudang Alat & Kunci Proteksi", "Construction")
+    local uiTool = createNativeUI("3. Gudang Alat", "Build")
+    uiTool:addLabelApp("Gudang Alat & Kunci Proteksi", "Build")
     uiTool:addTooltip("Fungsi Gudang Alat", "World khusus penyimpanan stok World Lock, Small Lock, Signal Jammer, dan Wooden Door.", "Info", false)
-    uiTool:addInputString("Nama World Alat", "", "World", "GUDANGALAT1", "Construction", "as_input_add_tool")
+    uiTool:addInputString("Nama World Alat", "", "World", "GUDANGALAT1", "Build", "as_input_add_tool")
     uiTool:addInputString("Door ID Gudang Alat", "", "Door ID", "DOOR123", "DoorFront", "as_input_add_tool_door")
     uiTool:addButton("➕ Tambah World Alat", "as_btn_add_tool_direct")
     uiTool:addButton("📍 Tambah World Sekarang", "as_btn_add_cur_tool")
@@ -2473,14 +2522,13 @@ local function registerNativeSoilUI()
     uiConsole:addButton("🗑️ Bersihkan Riwayat Log", "as_btn_clear_log")
     uiConsole:addDisplayList("Riwayat Log Operasi", "Default", "as_log_display_list")
 
-    -- Registrasi Kategori Tunggal & Sub-Menu Resmi ke GrowLauncher
-    pcall(addCategory, "Boren Farm", "Grass")
-    pcall(addIntoModule, uiWorld:generateJSON(), "Boren Farm")
-    pcall(addIntoModule, uiLock:generateJSON(), "Boren Farm")
-    pcall(addIntoModule, uiTool:generateJSON(), "Boren Farm")
-    pcall(addIntoModule, uiBlock:generateJSON(), "Boren Farm")
-    pcall(addIntoModule, uiLayout:generateJSON(), "Boren Farm")
-    pcall(addIntoModule, uiConsole:generateJSON(), "Boren Farm")
+    -- Registrasi Kategori Tunggal & 6 Sub-Menu Resmi ke GrowLauncher
+    addSubModule(uiWorld, "Boren Farm")
+    addSubModule(uiLock, "Boren Farm")
+    addSubModule(uiTool, "Boren Farm")
+    addSubModule(uiBlock, "Boren Farm")
+    addSubModule(uiLayout, "Boren Farm")
+    addSubModule(uiConsole, "Boren Farm")
 end
 
 -- ============================================================================
@@ -2768,21 +2816,31 @@ if setOnValue then
     end
 end
 
+if addHook then
+    pcall(addHook, OnValue, "onvalue")
+end
+if applyHook then
+    pcall(applyHook)
+end
+
 -- ============================================================================
 -- 18. SYSTEM INITIALIZATION & REGISTRATION
 -- ============================================================================
-pcall(function()
-    loadWorldsFromFile()
-    loadToolsFromFile()
-    loadBlocksFromFile()
-    registerNativeSoilUI()
-    applyCheatToggles()
-    updatePowerStatusList()
-    updateWorldDisplayList()
-    updateToolDisplayList()
-    updateBlockDisplayList()
-    updateLogDisplayList()
-end)
+-- 1. Registrasi Menu UI terlebih dahulu agar instan muncul di layar GrowLauncher
+registerNativeSoilUI()
 
-addLog("`2[Sistem Siap] `wAuto Soil Builder V2.3.0 Resmi Dimuat.")
+-- 2. Muat data cadangan file secara mandiri
+pcall(loadWorldsFromFile)
+pcall(loadToolsFromFile)
+pcall(loadBlocksFromFile)
+
+-- 3. Terapkan cheat & perbarui status tampilan
+pcall(applyCheatToggles)
+pcall(updatePowerStatusList)
+pcall(updateWorldDisplayList)
+pcall(updateToolDisplayList)
+pcall(updateBlockDisplayList)
+pcall(updateLogDisplayList)
+
+addLog("`2[Sistem Siap] `wAuto Soil Builder V2.3.1 Resmi Dimuat.")
 notifyUser("Auto Soil Builder Siap!")
