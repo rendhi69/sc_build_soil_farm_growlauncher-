@@ -91,6 +91,7 @@ local CFG = {
 }
 
 local STATE = {
+    runtime_hooks_installed = false,
     running                 = false,
     paused                  = false,
     current_world           = "",
@@ -1639,18 +1640,31 @@ local openUnifiedBlockManager
 local openEditWorldEntryDialog
 local openEditToolEntryDialog
 local openEditBlockEntryDialog
+local ensureRuntimeHooks
 
 local function safeSendRawDialog(dText)
     if not dText or dText == "" then return false end
+    if growtopia and type(growtopia.sendDialog) == "function" then
+        local ok = pcall(growtopia.sendDialog, dText)
+        if ok then return true end
+    end
+    if sendDialog then
+        local ok = pcall(sendDialog, dText)
+        if ok then return true end
+    end
     if sendRawDialog then
-        pcall(sendRawDialog, dText)
-        return true
-    elseif variant then
-        pcall(variant, { [0] = "OnDialogRequest", [1] = dText })
-        return true
-    elseif sendVariant then
-        pcall(sendVariant, { [0] = "OnDialogRequest", [1] = dText })
-        return true
+        local ok = pcall(sendRawDialog, dText)
+        if ok then return true end
+    end
+    if sendVariant then
+        local ok = pcall(sendVariant, { [0] = "OnDialogRequest", [1] = dText })
+        if ok then return true end
+        local ok2 = pcall(sendVariant, { v1 = "OnDialogRequest", v2 = dText })
+        if ok2 then return true end
+    end
+    if variant then
+        local ok = pcall(variant, { [0] = "OnDialogRequest", [1] = dText })
+        if ok then return true end
     end
     return false
 end
@@ -1779,6 +1793,13 @@ local function parseAndValidateBlockBatch(rawText, isReplace)
 end
 
 openUnifiedWorldManager = function(fmt)
+    if ensureRuntimeHooks then ensureRuntimeHooks() end
+    local curW = getWorldNameSafe()
+    if curW == "" or curW == "EXIT" then
+        notifyUser("Masuk ke dalam world untuk membuka dialog Kelola!")
+        addLog("`e[Perhatian] `oBuka menu dialog memerlukan karakter berada di dalam world.")
+        return false
+    end
     fmt = fmt or "colon"
     local copyLines = {}
     for _, w in ipairs(CFG.farm_world_list) do
@@ -1833,6 +1854,13 @@ openUnifiedWorldManager = function(fmt)
 end
 
 openUnifiedToolManager = function(fmt)
+    if ensureRuntimeHooks then ensureRuntimeHooks() end
+    local curW = getWorldNameSafe()
+    if curW == "" or curW == "EXIT" then
+        notifyUser("Masuk ke dalam world untuk membuka dialog Kelola!")
+        addLog("`e[Perhatian] `oBuka menu dialog memerlukan karakter berada di dalam world.")
+        return false
+    end
     fmt = fmt or "colon"
     local copyLines = {}
     for _, s in ipairs(CFG.storage_tool_list) do
@@ -1886,6 +1914,13 @@ openUnifiedToolManager = function(fmt)
 end
 
 openUnifiedBlockManager = function(fmt)
+    if ensureRuntimeHooks then ensureRuntimeHooks() end
+    local curW = getWorldNameSafe()
+    if curW == "" or curW == "EXIT" then
+        notifyUser("Masuk ke dalam world untuk membuka dialog Kelola!")
+        addLog("`e[Perhatian] `oBuka menu dialog memerlukan karakter berada di dalam world.")
+        return false
+    end
     fmt = fmt or "colon"
     local copyLines = {}
     for _, s in ipairs(CFG.storage_block_list) do
@@ -1992,17 +2027,25 @@ end
 -- ============================================================================
 -- DIALOG HOOK DISPATCHER
 -- ============================================================================
+local function parseDialogReturnFields(pkt)
+    local fields = {}
+    if type(pkt) ~= "string" then return fields end
+    for line in pkt:gmatch("[^\r\n]+") do
+        local k, v = line:match("^([^|]+)|(.*)$")
+        if k and k ~= "" then
+            v = (v or ""):gsub("|$", "")
+            fields[k] = v
+        end
+    end
+    return fields
+end
+
 local function onDialogReturnPacket(pkt)
     if not pkt or pkt == "" then return false end
-    local dName = pkt:match("dialog_name|([^\r\n]+)")
-    local btn   = pkt:match("buttonClicked|([^\r\n]+)")
-    if not dName then return false end
-
-    local fields = {}
-    for line in string.gmatch(pkt, "[^\r\n]+") do
-        local k, v = line:match("^([^|]+)|(.*)$")
-        if k then fields[k] = v or "" end
-    end
+    local fields = parseDialogReturnFields(pkt)
+    local dName = fields.dialog_name or ""
+    local btn   = fields.buttonClicked or ""
+    if dName == "" then return false end
 
     if dName == "boren_soil_world_mgr" then
         if btn == "boren_btn_wfmt_colon" then
@@ -2278,17 +2321,39 @@ local function onDialogReturnPacket(pkt)
     return false
 end
 
-if addHook then
-    pcall(addHook, "onvariant", "boren_soil_dlg_var", function(v)
-        if v and v[0] == "OnDialogRequest" and v[1] then
-            -- Passthrough
-        end
-    end)
-    pcall(addHook, "onsendpacket", "boren_soil_pkt_hook", function(t, str)
-        if t == 2 and str and str:find("dialog_name|boren_soil_") then
-            onDialogReturnPacket(str)
-        end
-    end)
+local function onSendPacketDialogHook(ptype, pkt)
+    if type(pkt) ~= "string" and type(ptype) == "string" then
+        pkt = ptype
+    end
+    if type(pkt) ~= "string" or pkt == "" then return false end
+    if not pkt:find("action|dialog_return", 1, true) then
+        return false
+    end
+    if pkt:find("dialog_name|boren_soil_", 1, true) then
+        local handled = onDialogReturnPacket(pkt)
+        if handled then return true end
+    end
+    return false
+end
+
+local function onVariantDialogHook(v)
+    return false
+end
+
+ensureRuntimeHooks = function()
+    if STATE.runtime_hooks_installed then return end
+    STATE.runtime_hooks_installed = true
+    onVariant = onVariantDialogHook
+    OnVariant = onVariantDialogHook
+    onSendPacket = onSendPacketDialogHook
+    OnSendPacket = onSendPacketDialogHook
+    if addHook then
+        pcall(addHook, onVariantDialogHook, "onvariant")
+        pcall(addHook, onSendPacketDialogHook, "onsendpacket")
+    end
+    if applyHook then
+        pcall(applyHook)
+    end
 end
 
 -- ============================================================================
@@ -2534,16 +2599,43 @@ end
 -- ============================================================================
 -- 17. EVENT DISPATCHERS & VALUE HANDLERS
 -- ============================================================================
-local function readGLString(alias, defaultVal)
-    if not getValue then return defaultVal end
-    local ok, res = pcall(getValue, alias)
-    if ok and res ~= nil and tostring(res) ~= "" then
-        return tostring(res)
+local function readGLString(alias, fallback)
+    if getValue then
+        for _, vtype in ipairs({ 2, 5 }) do
+            local ok, val = pcall(getValue, vtype, alias)
+            if ok and type(val) == "string" and val ~= "" then
+                return val
+            end
+        end
+        local ok2, val2 = pcall(getValue, alias)
+        if ok2 and type(val2) == "string" and val2 ~= "" then
+            return val2
+        end
     end
-    return defaultVal
+    return fallback
 end
 
-local function OnValue(index, name, value)
+local lastAliasEventTime = {}
+
+local function handleUIValue(vtype, name, value)
+    -- Shift argumen jika GrowLauncher memanggil onValue(alias, value) atau alias ada di vtype
+    if type(vtype) == "string" and (name == nil or type(name) ~= "string" or (type(name) == "string" and vtype:sub(1, 3) == "as_")) then
+        value = name
+        name = vtype
+        vtype = 0
+    end
+    name = tostring(name or "")
+    if name == "" then return end
+
+    local now = os.clock()
+    local isButton = (name:find("_btn_") ~= nil)
+    if isButton then
+        if lastAliasEventTime[name] and (now - lastAliasEventTime[name]) < 0.25 then
+            return
+        end
+        lastAliasEventTime[name] = now
+    end
+
     if name == "as_run_power" then
         if value == true or value == 1 or value == "1" then
             startSoilBot()
@@ -2560,17 +2652,40 @@ local function OnValue(index, name, value)
     elseif name == "as_input_add_door" then
         STATE.buf_new_door = tostring(value or "")
     elseif name == "as_btn_add_world" then
-        local nw = readGLString("as_input_add_world", STATE.buf_new_world)
-        local nd = readGLString("as_input_add_door", STATE.buf_new_door)
-        nw = nw:gsub("%s+", ""):upper()
-        nd = nd:gsub("^%s+", ""):gsub("%s+$", "")
-        if nw ~= "" then
-            table.insert(CFG.farm_world_list, { name = nw, door = nd, done = false })
-            savePrefs(CFG)
-            saveWorldsToFile()
-            updateWorldDisplayList()
-            notifyUser(string.format("World Put %s berhasil ditambahkan!", nw))
-            addLog(string.format("`2[Tambah World] `w%s [Door: %s] masuk ke antrean world put.", nw, (nd ~= "" and nd or "-")))
+        local wIn = readGLString("as_input_add_world", STATE.buf_new_world)
+        local dIn = readGLString("as_input_add_door", STATE.buf_new_door)
+        wIn = tostring(wIn or ""):gsub("^%s+", ""):gsub("%s+$", "")
+        dIn = tostring(dIn or ""):gsub("^%s+", ""):gsub("%s+$", "")
+        if wIn ~= "" then
+            local count = 0
+            for token in wIn:gmatch("[^,;\r\n]+") do
+                local tokenClean = token:gsub("^%s+", ""):gsub("%s+$", "")
+                if tokenClean ~= "" then
+                    local pName, pDoor = tokenClean:match("^([A-Za-z0-9_]+)[%s:|;,]+([A-Za-z0-9_]*)$")
+                    if not pName then pName = tokenClean:match("^([A-Za-z0-9_]+)$") end
+                    if pName and pName ~= "" then
+                        pName = pName:upper()
+                        pDoor = (pDoor and pDoor ~= "") and pDoor or dIn
+                        table.insert(CFG.farm_world_list, { name = pName, door = pDoor, done = false })
+                        count = count + 1
+                    end
+                end
+            end
+            if count > 0 then
+                STATE.buf_new_world = ""
+                STATE.buf_new_door = ""
+                if editValue then
+                    pcall(editValue, "as_input_add_world", "")
+                    pcall(editValue, "as_input_add_door", "")
+                end
+                savePrefs(CFG)
+                saveWorldsToFile()
+                updateWorldDisplayList()
+                notifyUser(string.format("%d World Put berhasil ditambahkan!", count))
+                addLog(string.format("`2[Tambah World] `w%d world dimasukkan ke antrean world put.", count))
+            else
+                notifyUser("Nama world put tidak valid!")
+            end
         else
             notifyUser("Nama world put tidak boleh kosong!")
         end
@@ -2578,7 +2693,7 @@ local function OnValue(index, name, value)
         local curW = getWorldNameSafe()
         if curW ~= "" and curW ~= "EXIT" then
             local nd = readGLString("as_input_add_door", STATE.buf_new_door)
-            nd = nd:gsub("^%s+", ""):gsub("%s+$", "")
+            nd = tostring(nd or ""):gsub("^%s+", ""):gsub("%s+$", "")
             table.insert(CFG.farm_world_list, { name = curW, door = nd, done = false })
             savePrefs(CFG)
             saveWorldsToFile()
@@ -2596,6 +2711,8 @@ local function OnValue(index, name, value)
         notifyUser("Daftar antrean world put dikosongkan!")
         addLog("`4[Kosongkan World] `oDaftar world put berhasil dikosongkan.")
     elseif name == "as_btn_manage_worlds" then
+        ensureRuntimeHooks()
+        updateWorldDisplayList()
         openUnifiedWorldManager()
     elseif name == "as_btn_save_worlds" then
         saveWorldsToFile()
@@ -2635,17 +2752,40 @@ local function OnValue(index, name, value)
     elseif name == "as_input_add_tool_door" then
         STATE.buf_new_tool_door = tostring(value or "")
     elseif name == "as_btn_add_tool_direct" then
-        local ns = readGLString("as_input_add_tool", STATE.buf_new_tool)
-        local nd = readGLString("as_input_add_tool_door", STATE.buf_new_tool_door)
-        ns = ns:gsub("%s+", ""):upper()
-        nd = nd:gsub("^%s+", ""):gsub("%s+$", "")
-        if ns ~= "" then
-            table.insert(CFG.storage_tool_list, { name = ns, door = nd })
-            savePrefs(CFG)
-            saveToolsToFile()
-            updateToolDisplayList()
-            notifyUser(string.format("Gudang Alat %s ditambahkan!", ns))
-            addLog(string.format("`2[Gudang Alat] `w%s [Door: %s] berhasil didaftarkan.", ns, (nd ~= "" and nd or "-")))
+        local sIn = readGLString("as_input_add_tool", STATE.buf_new_tool)
+        local dIn = readGLString("as_input_add_tool_door", STATE.buf_new_tool_door)
+        sIn = tostring(sIn or ""):gsub("^%s+", ""):gsub("%s+$", "")
+        dIn = tostring(dIn or ""):gsub("^%s+", ""):gsub("%s+$", "")
+        if sIn ~= "" then
+            local count = 0
+            for token in sIn:gmatch("[^,;\r\n]+") do
+                local tokenClean = token:gsub("^%s+", ""):gsub("%s+$", "")
+                if tokenClean ~= "" then
+                    local pName, pDoor = tokenClean:match("^([A-Za-z0-9_]+)[%s:|;,]+([A-Za-z0-9_]*)$")
+                    if not pName then pName = tokenClean:match("^([A-Za-z0-9_]+)$") end
+                    if pName and pName ~= "" then
+                        pName = pName:upper()
+                        pDoor = (pDoor and pDoor ~= "") and pDoor or dIn
+                        table.insert(CFG.storage_tool_list, { name = pName, door = pDoor })
+                        count = count + 1
+                    end
+                end
+            end
+            if count > 0 then
+                STATE.buf_new_tool = ""
+                STATE.buf_new_tool_door = ""
+                if editValue then
+                    pcall(editValue, "as_input_add_tool", "")
+                    pcall(editValue, "as_input_add_tool_door", "")
+                end
+                savePrefs(CFG)
+                saveToolsToFile()
+                updateToolDisplayList()
+                notifyUser(string.format("%d Gudang Alat berhasil ditambahkan!", count))
+                addLog(string.format("`2[Gudang Alat] `w%d world didaftarkan ke gudang alat.", count))
+            else
+                notifyUser("Nama gudang alat tidak valid!")
+            end
         else
             notifyUser("Nama world gudang alat tidak boleh kosong!")
         end
@@ -2653,7 +2793,7 @@ local function OnValue(index, name, value)
         local curW = getWorldNameSafe()
         if curW ~= "" and curW ~= "EXIT" then
             local nd = readGLString("as_input_add_tool_door", STATE.buf_new_tool_door)
-            nd = nd:gsub("^%s+", ""):gsub("%s+$", "")
+            nd = tostring(nd or ""):gsub("^%s+", ""):gsub("%s+$", "")
             table.insert(CFG.storage_tool_list, { name = curW, door = nd })
             savePrefs(CFG)
             saveToolsToFile()
@@ -2671,6 +2811,8 @@ local function OnValue(index, name, value)
         notifyUser("Daftar gudang alat dikosongkan!")
         addLog("`4[Kosongkan Alat] `oDaftar gudang alat dikosongkan.")
     elseif name == "as_btn_manage_tools" then
+        ensureRuntimeHooks()
+        updateToolDisplayList()
         openUnifiedToolManager()
     elseif name == "as_btn_save_tools" then
         saveToolsToFile()
@@ -2683,17 +2825,40 @@ local function OnValue(index, name, value)
     elseif name == "as_input_add_block_door" then
         STATE.buf_new_block_door = tostring(value or "")
     elseif name == "as_btn_add_block_direct" then
-        local ns = readGLString("as_input_add_block", STATE.buf_new_block)
-        local nd = readGLString("as_input_add_block_door", STATE.buf_new_block_door)
-        ns = ns:gsub("%s+", ""):upper()
-        nd = nd:gsub("^%s+", ""):gsub("%s+$", "")
-        if ns ~= "" then
-            table.insert(CFG.storage_block_list, { name = ns, door = nd })
-            savePrefs(CFG)
-            saveBlocksToFile()
-            updateBlockDisplayList()
-            notifyUser(string.format("Gudang Block %s ditambahkan!", ns))
-            addLog(string.format("`2[Gudang Block] `w%s [Door: %s] berhasil didaftarkan.", ns, (nd ~= "" and nd or "-")))
+        local sIn = readGLString("as_input_add_block", STATE.buf_new_block)
+        local dIn = readGLString("as_input_add_block_door", STATE.buf_new_block_door)
+        sIn = tostring(sIn or ""):gsub("^%s+", ""):gsub("%s+$", "")
+        dIn = tostring(dIn or ""):gsub("^%s+", ""):gsub("%s+$", "")
+        if sIn ~= "" then
+            local count = 0
+            for token in sIn:gmatch("[^,;\r\n]+") do
+                local tokenClean = token:gsub("^%s+", ""):gsub("%s+$", "")
+                if tokenClean ~= "" then
+                    local pName, pDoor = tokenClean:match("^([A-Za-z0-9_]+)[%s:|;,]+([A-Za-z0-9_]*)$")
+                    if not pName then pName = tokenClean:match("^([A-Za-z0-9_]+)$") end
+                    if pName and pName ~= "" then
+                        pName = pName:upper()
+                        pDoor = (pDoor and pDoor ~= "") and pDoor or dIn
+                        table.insert(CFG.storage_block_list, { name = pName, door = pDoor })
+                        count = count + 1
+                    end
+                end
+            end
+            if count > 0 then
+                STATE.buf_new_block = ""
+                STATE.buf_new_block_door = ""
+                if editValue then
+                    pcall(editValue, "as_input_add_block", "")
+                    pcall(editValue, "as_input_add_block_door", "")
+                end
+                savePrefs(CFG)
+                saveBlocksToFile()
+                updateBlockDisplayList()
+                notifyUser(string.format("%d Gudang Block berhasil ditambahkan!", count))
+                addLog(string.format("`2[Gudang Block] `w%d world didaftarkan ke gudang block.", count))
+            else
+                notifyUser("Nama gudang block tidak valid!")
+            end
         else
             notifyUser("Nama world gudang block tidak boleh kosong!")
         end
@@ -2701,7 +2866,7 @@ local function OnValue(index, name, value)
         local curW = getWorldNameSafe()
         if curW ~= "" and curW ~= "EXIT" then
             local nd = readGLString("as_input_add_block_door", STATE.buf_new_block_door)
-            nd = nd:gsub("^%s+", ""):gsub("%s+$", "")
+            nd = tostring(nd or ""):gsub("^%s+", ""):gsub("%s+$", "")
             table.insert(CFG.storage_block_list, { name = curW, door = nd })
             savePrefs(CFG)
             saveBlocksToFile()
@@ -2719,14 +2884,19 @@ local function OnValue(index, name, value)
         notifyUser("Daftar gudang block dikosongkan!")
         addLog("`4[Kosongkan Block] `oDaftar gudang block dikosongkan.")
     elseif name == "as_btn_manage_blocks" then
+        ensureRuntimeHooks()
+        updateBlockDisplayList()
         openUnifiedBlockManager()
     elseif name == "as_btn_save_blocks" then
         saveBlocksToFile()
     elseif name == "as_btn_load_blocks" then
         loadBlocksFromFile()
     elseif name == "as_in_restock_thresh" then
-        CFG.restock_threshold = tonumber(value) or CFG.restock_threshold
-        savePrefs(CFG)
+        local th = tonumber(value)
+        if th and th >= 1 then
+            CFG.restock_threshold = math.floor(th)
+            savePrefs(CFG)
+        end
 
     -- TAB 5: Desain & Layout
     elseif name == "as_in_block_id" then
@@ -2743,32 +2913,34 @@ local function OnValue(index, name, value)
         CFG.row_step = tonumber(value) or CFG.row_step
         savePrefs(CFG)
     elseif name == "as_in_start_y" then
-        CFG.row_start_y = tonumber(value) or CFG.row_start_y
+        CFG.start_y = tonumber(value) or CFG.start_y
         savePrefs(CFG)
     elseif name == "as_in_end_y" then
-        CFG.row_end_y = tonumber(value) or CFG.row_end_y
+        CFG.end_y = tonumber(value) or CFG.end_y
         savePrefs(CFG)
     elseif name == "as_in_start_x" then
-        CFG.row_start_x = tonumber(value) or CFG.row_start_x
+        CFG.start_x = tonumber(value) or CFG.start_x
         savePrefs(CFG)
     elseif name == "as_in_end_x" then
-        CFG.row_end_x = tonumber(value) or CFG.row_end_x
+        CFG.end_x = tonumber(value) or CFG.end_x
         savePrefs(CFG)
-    elseif name == "as_chk_modfly" then
-        CFG.use_modfly = (value == true or value == 1 or value == "1")
-        applyCheatToggles()
-    elseif name == "as_chk_anti_lava" then
-        CFG.use_anti_lava = (value == true or value == 1 or value == "1")
-        applyCheatToggles()
     elseif name == "as_chk_enable_water" then
-        CFG.enable_water_column = (value == true or value == 1 or value == "1")
+        CFG.enable_water_elevator = (value == true or value == 1 or value == "1")
         savePrefs(CFG)
     elseif name == "as_in_water_id" then
         CFG.water_item_id = tonumber(value) or CFG.water_item_id
         savePrefs(CFG)
     elseif name == "as_in_water_x" then
-        CFG.water_x = tonumber(value) or CFG.water_x
+        CFG.water_col_x = tonumber(value) or CFG.water_col_x
         savePrefs(CFG)
+    elseif name == "as_chk_modfly" then
+        CFG.use_modfly = (value == true or value == 1 or value == "1")
+        savePrefs(CFG)
+        applyCheatToggles()
+    elseif name == "as_chk_anti_lava" then
+        CFG.use_antilava = (value == true or value == 1 or value == "1")
+        savePrefs(CFG)
+        applyCheatToggles()
     elseif name == "as_in_delay_place" then
         CFG.delay_place = tonumber(value) or CFG.delay_place
         savePrefs(CFG)
@@ -2786,6 +2958,14 @@ local function OnValue(index, name, value)
         notifyUser("Riwayat log dibersihkan!")
     end
 end
+
+function OnValue(vtype, name, value)
+    local ok, err = pcall(handleUIValue, vtype, name, value)
+    if not ok then
+        addLog("[UI Err] " .. tostring(err))
+    end
+end
+onValue = OnValue
 
 -- ============================================================================
 -- GLOBAL LISTENER BINDINGS
@@ -2826,15 +3006,18 @@ end
 -- ============================================================================
 -- 18. SYSTEM INITIALIZATION & REGISTRATION
 -- ============================================================================
--- 1. Registrasi Menu UI terlebih dahulu agar instan muncul di layar GrowLauncher
+-- 1. Pasang runtime hooks untuk dialog & packet
+ensureRuntimeHooks()
+
+-- 2. Registrasi Menu UI terlebih dahulu agar instan muncul di layar GrowLauncher
 registerNativeSoilUI()
 
--- 2. Muat data cadangan file secara mandiri
+-- 3. Muat data cadangan file secara mandiri
 pcall(loadWorldsFromFile)
 pcall(loadToolsFromFile)
 pcall(loadBlocksFromFile)
 
--- 3. Terapkan cheat & perbarui status tampilan
+-- 4. Terapkan cheat & perbarui status tampilan
 pcall(applyCheatToggles)
 pcall(updatePowerStatusList)
 pcall(updateWorldDisplayList)
@@ -2842,5 +3025,5 @@ pcall(updateToolDisplayList)
 pcall(updateBlockDisplayList)
 pcall(updateLogDisplayList)
 
-addLog("`2[Sistem Siap] `wAuto Soil Builder V2.3.1 Resmi Dimuat.")
+addLog("`2[Sistem Siap] `wAuto Soil Builder V2.3.2 Resmi Dimuat.")
 notifyUser("Auto Soil Builder Siap!")
