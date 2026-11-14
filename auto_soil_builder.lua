@@ -2259,14 +2259,8 @@ local function registerNativeSoilUI()
     uiConsole:addButton("🗑️ Bersihkan Riwayat Log", "as_btn_clear_log")
     uiConsole:addDisplayList("Riwayat Log Operasi", "Default", "as_log_display_list")
 
-    -- Registrasi Kategori & Sub-Menu ke GrowLauncher
-    pcall(addCategory, "Boren Soil", "Grass")
+    -- Registrasi Kategori Tunggal & Sub-Menu Resmi ke GrowLauncher
     pcall(addCategory, "Boren Farm", "Grass")
-    pcall(addIntoModule, uiWorld:generateJSON(), "Boren Soil")
-    pcall(addIntoModule, uiLock:generateJSON(), "Boren Soil")
-    pcall(addIntoModule, uiStorage:generateJSON(), "Boren Soil")
-    pcall(addIntoModule, uiLayout:generateJSON(), "Boren Soil")
-    pcall(addIntoModule, uiConsole:generateJSON(), "Boren Soil")
     pcall(addIntoModule, uiWorld:generateJSON(), "Boren Farm")
     pcall(addIntoModule, uiLock:generateJSON(), "Boren Farm")
     pcall(addIntoModule, uiStorage:generateJSON(), "Boren Farm")
