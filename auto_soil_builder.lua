@@ -62,6 +62,23 @@ local KNOWN_ID_DOOR_IDS = {
     [ITEM.HOUSE_ENTRANCE] = true,
 }
 
+local DOOR_ID_PRESETS = {
+    { id = 12,   name = "Wooden Door (12)" },
+    { id = 102,  name = "Door (102)" },
+    { id = 540,  name = "Dungeon Door (540)" },
+    { id = 382,  name = "Portal (382)" },
+}
+
+local BLOCKER_DOOR_PRESETS = {
+    { id = 828,  name = "Air Vent (828)" },
+    { id = 492,  name = "House Entrance (492)" },
+    { id = 886,  name = "Screen Door (886)" },
+    { id = 1032, name = "Portcullis (1032)" },
+    { id = 12,   name = "Wooden Door (12)" },
+    { id = 102,  name = "Door (102)" },
+    { id = 540,  name = "Dungeon Door (540)" },
+}
+
 local ITEM_NAME_CACHE = {
     [242]  = "World Lock",
     [202]  = "Small Lock",
@@ -71,6 +88,12 @@ local ITEM_NAME_CACHE = {
     [226]  = "Signal Jammer",
     [828]  = "Air Vent",
     [12]   = "Wooden Door",
+    [102]  = "Door",
+    [540]  = "Dungeon Door",
+    [382]  = "Portal",
+    [492]  = "House Entrance",
+    [886]  = "Screen Door",
+    [1032] = "Portcullis",
     [6]    = "White Door",
     [8]    = "Bedrock",
     [2]    = "Dirt",
@@ -250,6 +273,8 @@ local openUnifiedBlockManager
 local openEditWorldEntryDialog
 local openEditToolEntryDialog
 local openEditBlockEntryDialog
+local syncInputsFromGL
+local refreshNativeDisplayLists
 
 -- 5. RESOLVER NAMA ITEM & LOGGING HELPERS
 local function resolveItemName(itemID)
@@ -270,6 +295,166 @@ local function resolveItemName(itemID)
         end
     end
     return "Item #" .. tostring(itemID)
+end
+
+local function cleanItemName(name)
+    if type(name) ~= "string" then return "" end
+    return (name:gsub("`.", ""):gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+local function lookupItemIDByName(name)
+    local clean = cleanItemName(name)
+    if clean == "" then return nil end
+
+    local embeddedId = clean:match("%((%d+)%)") or clean:match("#(%d+)")
+    if embeddedId and tonumber(embeddedId) and tonumber(embeddedId) > 0 then
+        return tonumber(embeddedId)
+    end
+
+    local cleanLow = clean:lower()
+    for id, n in pairs(ITEM_NAME_CACHE) do
+        if n and cleanItemName(n):lower() == cleanLow then
+            return id
+        end
+    end
+    for _, def in ipairs(BLOCKER_DOOR_PRESETS) do
+        if def.name and cleanItemName(def.name):lower():find(cleanLow, 1, true) then
+            return def.id
+        end
+    end
+    for _, def in ipairs(DOOR_ID_PRESETS) do
+        if def.name and cleanItemName(def.name):lower():find(cleanLow, 1, true) then
+            return def.id
+        end
+    end
+
+    if getItemInfoByName then
+        local ok, info = pcall(getItemInfoByName, clean)
+        if ok and info and tonumber(info.id) and tonumber(info.id) > 0 then
+            return tonumber(info.id)
+        end
+    end
+
+    if itemInfoManager and itemInfoManager.getItemInfoByName then
+        local ok, info = pcall(itemInfoManager.getItemInfoByName, clean)
+        if ok and info and tonumber(info.id) and tonumber(info.id) > 0 then
+            return tonumber(info.id)
+        end
+    end
+
+    if findItemID then
+        local ok, id = pcall(findItemID, clean)
+        if ok and tonumber(id) and tonumber(id) > 0 then
+            return tonumber(id)
+        end
+    end
+
+    if growtopia and growtopia.getItemID then
+        local ok, id = pcall(growtopia.getItemID, clean)
+        if ok and tonumber(id) and tonumber(id) > 0 then
+            return tonumber(id)
+        end
+    end
+
+    return nil
+end
+
+local function resolvePickedItemID(value)
+    if not value or value == "" then return nil end
+    if type(value) == "table" then
+        value = value.id or value.itemID or value.itemid or value.value or value.name
+    end
+    local num = tonumber(value)
+    if num and num > 0 then
+        return math.floor(num)
+    end
+    if type(value) == "string" and value ~= "" then
+        local sNum = tonumber(cleanItemName(value))
+        if sNum and sNum > 0 then
+            return math.floor(sNum)
+        end
+        local lookedUp = lookupItemIDByName(value)
+        if lookedUp and lookedUp > 0 then
+            return lookedUp
+        end
+    end
+    return nil
+end
+
+local function parseWorldEntryToken(rawToken, defaultDoor)
+    local clean = tostring(rawToken or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if clean == "" or clean:sub(1, 1) == "#" then return nil end
+
+    local body = clean
+    local isDone = false
+    local statusTag = nil
+
+    local b1, tag1 = clean:match("^(.-)[|:](DONE)$")
+    if not b1 then b1, tag1 = clean:match("^(.-)[|:](done)$") end
+    if not b1 then b1, tag1 = clean:match("^(.-)[|:](PROSES)$") end
+    if not b1 then b1, tag1 = clean:match("^(.-)[|:](ANTRI)$") end
+    if not b1 then b1, tag1 = clean:match("^(.-)|([01])$") end
+    if b1 and tag1 then
+        body = b1
+        statusTag = tag1:upper()
+        isDone = (statusTag == "DONE" or statusTag == "1")
+    end
+
+    local wName, dId = body:match("^([^|:]+)[|:](.*)$")
+    if not wName then
+        wName = body
+        dId = defaultDoor or ""
+    end
+    wName = wName:upper():gsub("%s+", "")
+    dId = (dId or ""):gsub("%s+", "")
+    if wName == "" or wName == "EXIT" then return nil end
+
+    return {
+        name = wName,
+        door = dId,
+        done = isDone,
+        status = isDone and "DONE" or "ANTRI",
+    }
+end
+
+local function addManualWorldsFromString(rawWorldStr, defaultDoorStr, clearExisting)
+    local s = tostring(rawWorldStr or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    local defDoor = tostring(defaultDoorStr or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if s == "" then
+        if clearExisting then CFG.farm_world_list = {} end
+        return 0
+    end
+
+    if clearExisting then
+        CFG.farm_world_list = {}
+    end
+
+    local addedCount = 0
+    for token in s:gmatch("[^,;\r\n]+") do
+        local parsed = parseWorldEntryToken(token, defDoor)
+        if parsed then
+            local found = false
+            for _, existing in ipairs(CFG.farm_world_list) do
+                if existing.name == parsed.name then
+                    existing.door = parsed.door
+                    existing.done = parsed.done
+                    existing.status = parsed.status
+                    found = true
+                    break
+                end
+            end
+            if not found then
+                table.insert(CFG.farm_world_list, parsed)
+            end
+            addedCount = addedCount + 1
+        end
+    end
+
+    if addedCount > 0 then
+        CFG.world_mode = "manual"
+        persistConfig()
+    end
+    return addedCount
 end
 
 local function addLog(msg)
@@ -739,19 +924,25 @@ end
 
 local function safeSendRawDialog(dText)
     if not dText or dText == "" then return false end
-    if runThread then
-        runThread(function()
-            safeSleep(120)
-            if sendVariantList then
-                pcall(sendVariantList, { [0] = "OnDialogRequest", [1] = dText })
-            elseif sendVariant then
-                pcall(sendVariant, { [0] = "OnDialogRequest", [1] = dText })
-            end
-        end)
-        return true
+    if growtopia and type(growtopia.sendDialog) == "function" then
+        local ok = pcall(growtopia.sendDialog, dText)
+        if ok then return true end
+    end
+    if sendVariant then
+        local ok0 = pcall(sendVariant, { v0 = "OnDialogRequest", v1 = dText })
+        if ok0 then return true end
+        local ok1 = pcall(sendVariant, { v1 = "OnDialogRequest", v2 = dText })
+        if ok1 then return true end
+        local okNum = pcall(sendVariant, { [0] = "OnDialogRequest", [1] = dText })
+        if okNum then return true end
     end
     if sendVariantList then
-        return pcall(sendVariantList, { [0] = "OnDialogRequest", [1] = dText })
+        local okList = pcall(sendVariantList, { [0] = "OnDialogRequest", [1] = dText })
+        if okList then return true end
+    end
+    if sendDialog then
+        pcall(sendDialog, dText)
+        return true
     end
     return false
 end
@@ -926,7 +1117,7 @@ local function inspectWorldSecurityState(doorX, doorY)
     -- 4. Check Penghalang Kiri di (doorX - 2, doorY - 1)
     if doorX - 2 >= 0 and doorY - 1 >= 0 then
         local ok, t = pcall(getTile, doorX - 2, doorY - 1)
-        if ok and t and (t.fg == CFG.blocker_door_itemid or KNOWN_ID_DOOR_IDS[t.fg] or t.fg == ITEM.AIR_VENT) then
+        if ok and t and (t.fg == CFG.blocker_door_itemid) then
             info.has_blocker = true
         end
     end
@@ -934,7 +1125,7 @@ local function inspectWorldSecurityState(doorX, doorY)
     -- 5. Check Door ID di (0, 0)
     do
         local ok, t = pcall(getTile, 0, 0)
-        if ok and t and (t.fg == CFG.id_door_itemid or KNOWN_ID_DOOR_IDS[t.fg] or t.fg == ITEM.WOODEN_DOOR or t.fg == ITEM.MAIN_DOOR) then
+        if ok and t and (t.fg == CFG.id_door_itemid) then
             info.has_id_door = true
         end
     end
@@ -1561,9 +1752,11 @@ local function generateRandomWorldName(length, useNumbers)
 end
 
 local function botMainLoop()
+    if syncInputsFromGL then pcall(syncInputsFromGL) end
+    if refreshNativeDisplayLists then pcall(refreshNativeDisplayLists) end
     STATE.running = true
     STATE.paused  = false
-    addLog("`2[Start Bot] `wAuto Soil Builder V2.6.0 resmi dimulai!")
+    addLog("`2[Start Bot] `wAuto Soil Builder V2.6.1 resmi dimulai!")
     updatePowerStatusList()
 
     while STATE.running do
@@ -1618,6 +1811,7 @@ end
 
 local function startSoilBot()
     if STATE.running then return end
+    if syncInputsFromGL then pcall(syncInputsFromGL) end
     if runThread then
         runThread(botMainLoop)
     else
@@ -1639,21 +1833,9 @@ local function parseWorldBatchFromString(rawInput)
     local list = {}
     if not rawInput or rawInput == "" then return list end
     for rawToken in rawInput:gmatch("[^\r\n,;]+") do
-        local token = rawToken:gsub("^%s+", ""):gsub("%s+$", "")
-        if token ~= "" then
-            local wName, wDoor = "", ""
-            if token:find(":") then
-                wName, wDoor = token:match("([^:]+):?(.*)")
-            elseif token:find("|") then
-                wName, wDoor = token:match("([^|]+)|?(.*)")
-            else
-                wName = token
-            end
-            wName = tostring(wName or ""):upper():gsub("%s+", "")
-            wDoor = tostring(wDoor or ""):gsub("%s+", "")
-            if wName ~= "" and wName ~= "EXIT" then
-                table.insert(list, { name = wName, door = wDoor })
-            end
+        local entry = parseWorldEntryToken(rawToken, "")
+        if entry and entry.name ~= "" and entry.name ~= "EXIT" then
+            table.insert(list, entry)
         end
     end
     return list
@@ -2234,73 +2416,88 @@ local function registerNativeSoilUI()
 end
 
 -- ============================================================================
--- 19. DISPLAY LIST UPDATERS
+-- 19. DISPLAY LIST UPDATERS (Compatible with GrowLauncher editValue / editDisplayList)
 -- ============================================================================
-updatePowerStatusList = function()
-    if not editDisplayList then return end
-    local items = {
-        string.format("Status: %s", STATE.current_status_title),
-        string.format("Keterangan: %s", STATE.current_status_desc),
-        string.format("World Aktif: %s (Door: %s)", STATE.active_world ~= "" and STATE.active_world or "-", STATE.active_door ~= "" and STATE.active_door or "-"),
-        string.format("Baris Aktif: Y=%d, Col=%d", STATE.active_row, STATE.active_col),
-        string.format("Total World Selesai: %d", STATE.worlds_completed),
-        string.format("Total Block Terpasang: %d", STATE.total_placed_blocks),
+local function safeEditDisplayList(alias, rows)
+    if not rows then return end
+    local jsonStr = jsonEncode(rows)
+    if editValue then
+        pcall(editValue, alias, jsonStr)
+    elseif editDisplayList then
+        pcall(editDisplayList, alias, jsonStr)
+    end
+end
+
+local function buildPowerStatusRows()
+    local row1Title = "STATUS: BERHENTI (OFF)"
+    local row1Sub = "Tekan 'START SOIL BOT' untuk mulai"
+    if STATE.running and STATE.paused then
+        row1Title = "STATUS: DIJEDA (PAUSE)"
+        row1Sub = "World: " .. tostring(STATE.active_world ~= "" and STATE.active_world or "-")
+    elseif STATE.running then
+        row1Title = "STATUS: SEDANG JALAN (ON)"
+        row1Sub = tostring(STATE.current_status_title ~= "" and STATE.current_status_title or "Proses Soil Farm")
+    end
+    return {
+        { row1Title, row1Sub },
+        { "World Aktif: " .. tostring(STATE.active_world ~= "" and STATE.active_world or "-"), "Door: " .. tostring(STATE.active_door ~= "" and STATE.active_door or "-") },
+        { "Progress Grid", string.format("Baris Y=%d | Col=%d", STATE.active_row or 0, STATE.active_col or 0) },
+        { "Statistik", string.format("Selesai: %d | Terpasang: %d block", STATE.worlds_completed or 0, STATE.total_placed_blocks or 0) }
     }
-    pcall(editDisplayList, "sb_power_status_list", jsonEncode(items))
-
-    local logItems = {}
-    for i = 1, math.min(15, #STATE.last_log_lines) do
-        table.insert(logItems, STATE.last_log_lines[i])
-    end
-    pcall(editDisplayList, "sb_console_list", jsonEncode(logItems))
 end
 
-updateWorldDisplayList = function()
-    if not editDisplayList then return end
-    local items = {}
-    if #CFG.farm_world_list == 0 then
-        table.insert(items, "(Antrean World Put masih kosong)")
-    else
-        for i, w in ipairs(CFG.farm_world_list) do
-            local d = (w.door and w.door ~= "") and w.door or "-"
-            local st = (w.done or w.status == "DONE") and "[DONE]" or (w.status or "[ANTRI]")
-            table.insert(items, string.format("%d. %s [Door: %s] - %s", i, w.name, d, st))
-        end
+local function buildConsoleRows()
+    local rows = {
+        { "Status: " .. tostring(STATE.current_status_title ~= "" and STATE.current_status_title or "IDLE"), tostring(STATE.current_status_desc ~= "" and STATE.current_status_desc or "-") }
+    }
+    for i = 1, math.min(10, #STATE.last_log_lines) do
+        table.insert(rows, { "Log #" .. tostring(i), tostring(STATE.last_log_lines[i]) })
     end
-    pcall(editDisplayList, "sb_world_display_list", jsonEncode(items))
+    if #rows == 1 then
+        table.insert(rows, { "Log Console", "Belum ada log tercatat" })
+    end
+    return rows
 end
 
-updateToolDisplayList = function()
-    if not editDisplayList then return end
-    local items = {}
-    if #CFG.storage_tool_list == 0 then
-        table.insert(items, "(Gudang Alat masih kosong)")
-    else
-        for i, s in ipairs(CFG.storage_tool_list) do
-            local d = (s.door and s.door ~= "") and s.door or "-"
-            table.insert(items, string.format("%d. %s [Door: %s]", i, s.name, d))
-        end
+local function buildWorldDisplayRows()
+    local rows = {}
+    for i, w in ipairs(CFG.farm_world_list) do
+        local d = (w.door and w.door ~= "") and ("Door: " .. w.door) or "White Door"
+        local st = (w.done or w.status == "DONE") and "DONE" or ((STATE.running and STATE.active_world == w.name) and "PROSES" or (w.status or "ANTRI"))
+        table.insert(rows, { string.format("%d. %s [%s]", i, w.name, st), d })
     end
-    pcall(editDisplayList, "sb_tool_display_list", jsonEncode(items))
+    if #rows == 0 then
+        table.insert(rows, { "Antrean World Put masih kosong", "Ketik Nama World lalu klik + Tambah" })
+    end
+    return rows
 end
 
-updateBlockDisplayList = function()
-    if not editDisplayList then return end
-    local items = {}
-    if #CFG.storage_block_list == 0 then
-        table.insert(items, "(Gudang Block masih kosong)")
-    else
-        for i, s in ipairs(CFG.storage_block_list) do
-            local d = (s.door and s.door ~= "") and s.door or "-"
-            table.insert(items, string.format("%d. %s [Door: %s]", i, s.name, d))
-        end
+local function buildToolDisplayRows()
+    local rows = {}
+    for i, s in ipairs(CFG.storage_tool_list) do
+        local d = (s.door and s.door ~= "") and ("Door: " .. s.door) or "White Door"
+        table.insert(rows, { string.format("%d. %s", i, s.name), d })
     end
-    pcall(editDisplayList, "sb_block_display_list", jsonEncode(items))
+    if #rows == 0 then
+        table.insert(rows, { "Gudang Alat masih kosong", "Ketik Nama World lalu klik + Tambah Gudang Alat" })
+    end
+    return rows
 end
 
-updateBagDisplayList = function()
-    if not editDisplayList then return end
-    local items = {}
+local function buildBlockDisplayRows()
+    local rows = {}
+    for i, s in ipairs(CFG.storage_block_list) do
+        local d = (s.door and s.door ~= "") and ("Door: " .. s.door) or "White Door"
+        table.insert(rows, { string.format("%d. %s", i, s.name), d })
+    end
+    if #rows == 0 then
+        table.insert(rows, { "Gudang Block masih kosong", "Ketik Nama World lalu klik + Tambah Gudang Block" })
+    end
+    return rows
+end
+
+local function buildBagDisplayRows()
+    local rows = {}
     if getInventory then
         local ok, inv = pcall(getInventory)
         if ok and inv and inv.items then
@@ -2308,19 +2505,48 @@ updateBagDisplayList = function()
                 local id = it.id or it.itemid or 0
                 local cnt = it.count or it.amount or 0
                 if id > 0 and cnt > 0 then
-                    table.insert(items, string.format("%s (ID %d) x%d", resolveItemName(id), id, cnt))
+                    table.insert(rows, { string.format("%s (ID: %d)", resolveItemName(id), id), string.format("Jumlah: %d", cnt) })
                 end
             end
         end
     end
-    if #items == 0 then
-        table.insert(items, "(Tas kosong atau gagal dibaca)")
+    if #rows == 0 then
+        table.insert(rows, { "Tas kosong atau belum terbaca", "Klik 'Refresh Tas' saat berada di world" })
     end
-    pcall(editDisplayList, "sb_bag_display_list", jsonEncode(items))
+    return rows
+end
+
+updatePowerStatusList = function()
+    safeEditDisplayList("sb_power_status_list", buildPowerStatusRows())
+    safeEditDisplayList("sb_console_list", buildConsoleRows())
+end
+
+updateWorldDisplayList = function()
+    safeEditDisplayList("sb_world_display_list", buildWorldDisplayRows())
+end
+
+updateToolDisplayList = function()
+    safeEditDisplayList("sb_tool_display_list", buildToolDisplayRows())
+end
+
+updateBlockDisplayList = function()
+    safeEditDisplayList("sb_block_display_list", buildBlockDisplayRows())
+end
+
+updateBagDisplayList = function()
+    safeEditDisplayList("sb_bag_display_list", buildBagDisplayRows())
+end
+
+refreshNativeDisplayLists = function()
+    if updatePowerStatusList then pcall(updatePowerStatusList) end
+    if updateWorldDisplayList then pcall(updateWorldDisplayList) end
+    if updateToolDisplayList then pcall(updateToolDisplayList) end
+    if updateBlockDisplayList then pcall(updateBlockDisplayList) end
+    if updateBagDisplayList then pcall(updateBagDisplayList) end
 end
 
 -- ============================================================================
--- 20. INPUT STRING HELPER
+-- 20. INPUT STRING & STATE SYNC HELPER
 -- ============================================================================
 local function readGLString(alias, defaultVal)
     defaultVal = defaultVal or ""
@@ -2333,6 +2559,36 @@ local function readGLString(alias, defaultVal)
         if ok0 and v0 ~= nil and tostring(v0) ~= "" then return tostring(v0) end
     end
     return defaultVal
+end
+
+syncInputsFromGL = function()
+    local wIn = readGLString("sb_manual_world_input", "")
+    if wIn ~= "" then
+        STATE.buf_world_name = wIn:upper()
+        CFG.manual_world_text = STATE.buf_world_name
+    end
+    local dIn = readGLString("sb_manual_door_input", "")
+    if dIn ~= "" then
+        STATE.buf_world_door = dIn
+        CFG.manual_door_text = dIn
+    end
+    local idDoorIn = tonumber(readGLString("sb_input_id_door", ""))
+    if idDoorIn and idDoorIn > 0 then
+        CFG.id_door_itemid = math.floor(idDoorIn)
+    end
+    local blockerIn = tonumber(readGLString("sb_input_blocker", ""))
+    if blockerIn and blockerIn > 0 then
+        CFG.blocker_door_itemid = math.floor(blockerIn)
+    end
+    local dId = readGLString("sb_door_id", "")
+    if dId ~= "" then CFG.door_id = dId:gsub("%s+", "") end
+    local dLbl = readGLString("sb_door_label", "")
+    if dLbl ~= "" then CFG.door_label = dLbl end
+    local blkIdIn = tonumber(readGLString("sb_block_id", ""))
+    if blkIdIn and blkIdIn > 0 then CFG.block_id = math.floor(blkIdIn) end
+    local wtrIdIn = tonumber(readGLString("sb_in_water_id", ""))
+    if wtrIdIn and wtrIdIn > 0 then CFG.water_item_id = math.floor(wtrIdIn) end
+    persistConfig()
 end
 
 -- ============================================================================
@@ -2379,23 +2635,26 @@ local function handleUIValue(vtype, name, value)
         CFG.manual_door_text = tostring(value or "")
         STATE.buf_world_door = CFG.manual_door_text
     elseif name == "sb_btn_add_world" then
-        local wIn = readGLString("sb_manual_world_input", STATE.buf_world_name)
+        local wIn = readGLString("sb_manual_world_input", "")
         if wIn ~= "" then
             STATE.buf_world_name = wIn:upper()
             CFG.manual_world_text = STATE.buf_world_name
         end
-        local dIn = readGLString("sb_manual_door_input", STATE.buf_world_door)
+        local dIn = readGLString("sb_manual_door_input", "")
         if dIn ~= "" then
             STATE.buf_world_door = dIn
             CFG.manual_door_text = dIn
         end
         local targetW = (STATE.buf_world_name ~= "" and STATE.buf_world_name) or CFG.manual_world_text
         local targetD = (STATE.buf_world_door ~= "" and STATE.buf_world_door) or CFG.manual_door_text
-        if targetW ~= "" and targetW ~= "EXIT" then
-            table.insert(CFG.farm_world_list, { name = targetW, door = targetD, status = "ANTRI", done = false })
-            persistConfig()
-            updateWorldDisplayList()
-            if sendNotification then pcall(sendNotification, "World ditambahkan: " .. targetW) end
+        local count = addManualWorldsFromString(targetW, targetD, false)
+        persistConfig()
+        updateWorldDisplayList()
+        if count > 0 then
+            STATE.buf_world_name = ""
+            CFG.manual_world_text = ""
+            if editValue then pcall(editValue, "sb_manual_world_input", "") end
+            if sendNotification then pcall(sendNotification, string.format("%d World ditambahkan! (Total: %d)", count, #CFG.farm_world_list)) end
         else
             if sendNotification then pcall(sendNotification, "Isi Nama World dulu di atas!") end
         end
@@ -2403,10 +2662,10 @@ local function handleUIValue(vtype, name, value)
         local curW = getWorldNameSafe()
         if curW ~= "" and curW ~= "EXIT" then
             local dIn = readGLString("sb_manual_door_input", STATE.buf_world_door)
-            table.insert(CFG.farm_world_list, { name = curW, door = dIn, status = "ANTRI", done = false })
+            local count = addManualWorldsFromString(curW, dIn, false)
             persistConfig()
             updateWorldDisplayList()
-            if sendNotification then pcall(sendNotification, "World aktif ditambahkan: " .. curW) end
+            if sendNotification then pcall(sendNotification, string.format("World aktif ditambahkan: %s (Total: %d)", curW, #CFG.farm_world_list)) end
         else
             if sendNotification then pcall(sendNotification, "Anda belum masuk ke dalam world!") end
         end
@@ -2491,11 +2750,21 @@ local function handleUIValue(vtype, name, value)
         CFG.use_id_door = toBoolVal(value)
         persistConfig()
     elseif name == "sb_pick_id_door" then
-        CFG.id_door_itemid = tonumber(value) or CFG.id_door_itemid
-        persistConfig()
+        if not value or value == "" or value == 0 or value == "0" then return end
+        local num = resolvePickedItemID(value)
+        if num and num > 0 then
+            CFG.id_door_itemid = num
+            persistConfig()
+            if editValue then pcall(editValue, "sb_input_id_door", tostring(num)) end
+            if sendNotification then pcall(sendNotification, "Door ID: " .. resolveItemName(num) .. " (ID: " .. num .. ")") end
+        end
     elseif name == "sb_input_id_door" then
-        CFG.id_door_itemid = tonumber(value) or CFG.id_door_itemid
-        persistConfig()
+        local num = tonumber(value)
+        if num and num > 0 and CFG.id_door_itemid ~= math.floor(num) then
+            CFG.id_door_itemid = math.floor(num)
+            persistConfig()
+            if sendNotification then pcall(sendNotification, "Door ID (Manual): " .. resolveItemName(CFG.id_door_itemid) .. " (ID: " .. CFG.id_door_itemid .. ")") end
+        end
     elseif name == "sb_door_id" then
         CFG.door_id = tostring(value or ""):gsub("%s+", "")
         persistConfig()
@@ -2509,11 +2778,21 @@ local function handleUIValue(vtype, name, value)
         CFG.use_blocker_door = toBoolVal(value)
         persistConfig()
     elseif name == "sb_pick_blocker" then
-        CFG.blocker_door_itemid = tonumber(value) or CFG.blocker_door_itemid
-        persistConfig()
+        if not value or value == "" or value == 0 or value == "0" then return end
+        local num = resolvePickedItemID(value)
+        if num and num > 0 then
+            CFG.blocker_door_itemid = num
+            persistConfig()
+            if editValue then pcall(editValue, "sb_input_blocker", tostring(num)) end
+            if sendNotification then pcall(sendNotification, "Penghalang Kiri: " .. resolveItemName(num) .. " (ID: " .. num .. ")") end
+        end
     elseif name == "sb_input_blocker" then
-        CFG.blocker_door_itemid = tonumber(value) or CFG.blocker_door_itemid
-        persistConfig()
+        local num = tonumber(value)
+        if num and num > 0 and CFG.blocker_door_itemid ~= math.floor(num) then
+            CFG.blocker_door_itemid = math.floor(num)
+            persistConfig()
+            if sendNotification then pcall(sendNotification, "Penghalang (Manual): " .. resolveItemName(CFG.blocker_door_itemid) .. " (ID: " .. CFG.blocker_door_itemid .. ")") end
+        end
 
     -- Tab 3: Storage (Gudang Alat, Block & Water)
     elseif name == "sb_input_add_tool" then
@@ -2523,20 +2802,49 @@ local function handleUIValue(vtype, name, value)
     elseif name == "sb_btn_add_tool_direct" then
         local tName = readGLString("sb_input_add_tool", STATE.buf_tool_name):upper()
         local tDoor = readGLString("sb_input_add_tool_door", STATE.buf_tool_door)
-        if tName ~= "" and tName ~= "EXIT" then
-            table.insert(CFG.storage_tool_list, { name = tName, door = tDoor })
+        local parsed = parseWorldBatchFromString(tName)
+        if #parsed == 0 and tName ~= "" and tName ~= "EXIT" then
+            table.insert(parsed, { name = tName, door = tDoor })
+        end
+        local added = 0
+        for _, it in ipairs(parsed) do
+            local d = (it.door and it.door ~= "") and it.door or tDoor
+            local exists = false
+            for _, ex in ipairs(CFG.storage_tool_list) do
+                if ex.name == it.name then exists = true; break end
+            end
+            if not exists then
+                table.insert(CFG.storage_tool_list, { name = it.name, door = d })
+                added = added + 1
+            end
+        end
+        if added > 0 then
+            STATE.buf_tool_name = ""
+            if editValue then pcall(editValue, "sb_input_add_tool", "") end
             persistConfig()
             updateToolDisplayList()
-            if sendNotification then pcall(sendNotification, "Gudang Alat ditambahkan: " .. tName) end
+            if sendNotification then pcall(sendNotification, string.format("%d Gudang Alat ditambahkan! (Total: %d)", added, #CFG.storage_tool_list)) end
+        else
+            if sendNotification then pcall(sendNotification, "Isi Nama World Gudang Alat dulu!") end
         end
     elseif name == "sb_btn_add_cur_tool" then
         local curW = getWorldNameSafe()
         if curW ~= "" and curW ~= "EXIT" then
             local tDoor = readGLString("sb_input_add_tool_door", STATE.buf_tool_door)
-            table.insert(CFG.storage_tool_list, { name = curW, door = tDoor })
-            persistConfig()
-            updateToolDisplayList()
-            if sendNotification then pcall(sendNotification, "World aktif masuk ke Gudang Alat: " .. curW) end
+            local exists = false
+            for _, ex in ipairs(CFG.storage_tool_list) do
+                if ex.name == curW then exists = true; break end
+            end
+            if not exists then
+                table.insert(CFG.storage_tool_list, { name = curW, door = tDoor })
+                persistConfig()
+                updateToolDisplayList()
+                if sendNotification then pcall(sendNotification, "World aktif masuk ke Gudang Alat: " .. curW) end
+            else
+                if sendNotification then pcall(sendNotification, "World sudah ada di daftar Gudang Alat!") end
+            end
+        else
+            if sendNotification then pcall(sendNotification, "Anda belum masuk ke dalam world!") end
         end
     elseif name == "sb_btn_manage_tools" then
         updateToolDisplayList()
@@ -2554,20 +2862,49 @@ local function handleUIValue(vtype, name, value)
     elseif name == "sb_btn_add_block_direct" then
         local bName = readGLString("sb_input_add_block", STATE.buf_block_name):upper()
         local bDoor = readGLString("sb_input_add_block_door", STATE.buf_block_door)
-        if bName ~= "" and bName ~= "EXIT" then
-            table.insert(CFG.storage_block_list, { name = bName, door = bDoor })
+        local parsed = parseWorldBatchFromString(bName)
+        if #parsed == 0 and bName ~= "" and bName ~= "EXIT" then
+            table.insert(parsed, { name = bName, door = bDoor })
+        end
+        local added = 0
+        for _, it in ipairs(parsed) do
+            local d = (it.door and it.door ~= "") and it.door or bDoor
+            local exists = false
+            for _, ex in ipairs(CFG.storage_block_list) do
+                if ex.name == it.name then exists = true; break end
+            end
+            if not exists then
+                table.insert(CFG.storage_block_list, { name = it.name, door = d })
+                added = added + 1
+            end
+        end
+        if added > 0 then
+            STATE.buf_block_name = ""
+            if editValue then pcall(editValue, "sb_input_add_block", "") end
             persistConfig()
             updateBlockDisplayList()
-            if sendNotification then pcall(sendNotification, "Gudang Block ditambahkan: " .. bName) end
+            if sendNotification then pcall(sendNotification, string.format("%d Gudang Block ditambahkan! (Total: %d)", added, #CFG.storage_block_list)) end
+        else
+            if sendNotification then pcall(sendNotification, "Isi Nama World Gudang Block dulu!") end
         end
     elseif name == "sb_btn_add_cur_block" then
         local curW = getWorldNameSafe()
         if curW ~= "" and curW ~= "EXIT" then
             local bDoor = readGLString("sb_input_add_block_door", STATE.buf_block_door)
-            table.insert(CFG.storage_block_list, { name = curW, door = bDoor })
-            persistConfig()
-            updateBlockDisplayList()
-            if sendNotification then pcall(sendNotification, "World aktif masuk ke Gudang Block: " .. curW) end
+            local exists = false
+            for _, ex in ipairs(CFG.storage_block_list) do
+                if ex.name == curW then exists = true; break end
+            end
+            if not exists then
+                table.insert(CFG.storage_block_list, { name = curW, door = bDoor })
+                persistConfig()
+                updateBlockDisplayList()
+                if sendNotification then pcall(sendNotification, "World aktif masuk ke Gudang Block: " .. curW) end
+            else
+                if sendNotification then pcall(sendNotification, "World sudah ada di daftar Gudang Block!") end
+            end
+        else
+            if sendNotification then pcall(sendNotification, "Anda belum masuk ke dalam world!") end
         end
     elseif name == "sb_btn_manage_blocks" then
         updateBlockDisplayList()
@@ -2655,11 +2992,7 @@ end
 
 -- 23. INISIALISASI UI
 registerNativeSoilUI()
-updatePowerStatusList()
-updateWorldDisplayList()
-updateToolDisplayList()
-updateBlockDisplayList()
-updateBagDisplayList()
+refreshNativeDisplayLists()
 
 local ALL_UI_ALIASES = {
     "sb_run_power", "sb_btn_stop", "sb_pause_toggle",
@@ -2705,3 +3038,6 @@ _G.SOIL_STATE = STATE
 _G.inspectWorldSecurityState = inspectWorldSecurityState
 _G.inspectMissingSoilBlocks = inspectMissingSoilBlocks
 _G.setupWorldLocks = setupWorldLocks
+_G.resolvePickedItemID = resolvePickedItemID
+_G.addManualWorldsFromString = addManualWorldsFromString
+_G.refreshNativeDisplayLists = refreshNativeDisplayLists
