@@ -7,7 +7,49 @@
 -- ============================================================================
 
 -- ============================================================================
--- 1. SAFE PREFERENCES & CONFIGURATION
+-- 1. PURE LUA JSON ENCODER (STANDAR GROWLAUNCHER NATIVE UI)
+-- ============================================================================
+local function escapeJsonStr(s)
+    s = tostring(s or "")
+    s = s:gsub("\\", "\\\\")
+    s = s:gsub('"', '\\"')
+    s = s:gsub("\n", "\\n")
+    s = s:gsub("\r", "\\r")
+    s = s:gsub("\t", "\\t")
+    return '"' .. s .. '"'
+end
+
+local function encodeJsonValue(v)
+    local t = type(v)
+    if t == "string" then
+        return escapeJsonStr(v)
+    elseif t == "number" or t == "boolean" then
+        return tostring(v)
+    elseif t == "table" then
+        local isArr = (#v > 0) or (next(v) == nil)
+        if isArr then
+            local parts = {}
+            for i = 1, #v do
+                parts[i] = encodeJsonValue(v[i])
+            end
+            return "[" .. table.concat(parts, ",") .. "]"
+        else
+            local parts = {}
+            for k, val in pairs(v) do
+                table.insert(parts, escapeJsonStr(k) .. ":" .. encodeJsonValue(val))
+            end
+            return "{" .. table.concat(parts, ",") .. "}"
+        end
+    end
+    return "null"
+end
+
+local function jsonEncode(val)
+    return encodeJsonValue(val)
+end
+
+-- ============================================================================
+-- 2. SAFE PREFERENCES & CONFIGURATION
 -- ============================================================================
 local ok_pref, PreferencesMod = pcall(require, "Preferences")
 if not (ok_pref and PreferencesMod) then
@@ -116,10 +158,11 @@ local STATE = {
     status_text             = "IDLE",
     log_messages            = {},
     
-    -- Dirty input tracking (UI Save Indicators)
-    dirty_block_id          = false,
-    dirty_blast_id          = false,
-    dirty_door_id           = false,
+    -- Buffer input
+    buf_new_world           = "",
+    buf_new_door            = "",
+    buf_new_stor            = "",
+    buf_new_stor_door       = "",
     
     -- Active world progression
     active_row              = 2,
@@ -193,8 +236,14 @@ pcall(function()
     end
 end)
 
+-- Forward declarations of update functions
+local updatePowerStatusList = nil
+local updateWorldDisplayList = nil
+local updateStorageDisplayList = nil
+local updateLogDisplayList = nil
+
 -- ============================================================================
--- 2. ITEM CONSTANTS & SAFE NAME RESOLVER
+-- 3. ITEM CONSTANTS & SAFE NAME RESOLVER
 -- ============================================================================
 local KNOWN_ITEMS = {
     [0]    = "Blank / Udara",
@@ -258,13 +307,13 @@ local function getItemNameSafe(itemID)
 end
 
 -- ============================================================================
--- 3. LOGGING, WEBHOOK & STATUS ENGINE
+-- 4. LOGGING, WEBHOOK & DISPLAY UPDATERS
 -- ============================================================================
 local function addLog(msg)
     local tStr = os.date("%H:%M:%S")
     local line = string.format("[%s] %s", tStr, msg)
     table.insert(STATE.log_messages, 1, line)
-    while #STATE.log_messages > 60 do
+    while #STATE.log_messages > 50 do
         table.remove(STATE.log_messages)
     end
     if LogToConsole then
@@ -318,8 +367,63 @@ local function sendWebhookNotification(eventTitle, eventDesc)
     end)
 end
 
+-- UI Real-time Updaters via editValue
+updatePowerStatusList = function()
+    if not editValue then return end
+    local statusTitle = STATE.running and (STATE.paused and "STATUS: DIJEDA (PAUSE)" or "STATUS: SEDANG BERJALAN") or "STATUS: BERHENTI (OFF)"
+    local curW = (STATE.current_world ~= "") and STATE.current_world or "(Belum masuk world)"
+    local blockInfo = string.format("%s (ID: %d)", getItemNameSafe(CFG.block_id), CFG.block_id)
+    local pList = {
+        { statusTitle, STATE.status_text or "Siap digunakan" },
+        { "World Farm Aktif", curW },
+        { "Block yang Ditaruh", blockInfo },
+        { "Total Block Terpasang", string.format("%d Block", STATE.total_placed_blocks) },
+        { "Total World Selesai", string.format("%d World", STATE.total_worlds_completed) },
+    }
+    pcall(editValue, "as_power_status_list", jsonEncode(pList))
+end
+
+updateWorldDisplayList = function()
+    if not editValue then return end
+    local list = {}
+    for idx, w in ipairs(CFG.farm_world_list) do
+        local status = w.done and "`2[SELESAI]" or "`e[ANTREAN]"
+        local dInfo = (w.door and w.door ~= "") and (" [Door: " .. w.door .. "]") or ""
+        table.insert(list, {
+            string.format("%d. %s%s", idx, w.name, dInfo),
+            status
+        })
+    end
+    if #list == 0 then table.insert(list, { "Antrean world kosong", "Gunakan form di atas untuk menambah" }) end
+    pcall(editValue, "as_world_display_list", jsonEncode(list))
+end
+
+updateStorageDisplayList = function()
+    if not editValue then return end
+    local list = {}
+    for idx, s in ipairs(CFG.storage_list) do
+        local dInfo = (s.door and s.door ~= "") and (" [Door: " .. s.door .. "]") or ""
+        table.insert(list, {
+            string.format("%d. %s%s", idx, s.name, dInfo),
+            "Gudang Block"
+        })
+    end
+    if #list == 0 then table.insert(list, { "Belum ada gudang", "Tambahkan gudang di form di atas" }) end
+    pcall(editValue, "as_stor_display_list", jsonEncode(list))
+end
+
+updateLogDisplayList = function()
+    if not editValue then return end
+    local lList = {}
+    for _, l in ipairs(STATE.log_messages) do
+        table.insert(lList, { l, "" })
+    end
+    if #lList == 0 then table.insert(lList, { "Belum ada aktivitas.", "" }) end
+    pcall(editValue, "as_log_display_list", jsonEncode(lList))
+end
+
 -- ============================================================================
--- 4. SAFE FILE PERSISTENCE ENGINE (FOLDER DOWNLOAD HP / PC)
+-- 5. SAFE FILE PERSISTENCE ENGINE (FOLDER DOWNLOAD HP / PC)
 -- ============================================================================
 local function resolveFilePath(fileName, fallbackName)
     fileName = (fileName and fileName ~= "") and fileName or fallbackName
@@ -398,7 +502,7 @@ local function loadWorldsFromFile()
     savePrefs(CFG)
     addLog(string.format("`2[Berhasil Muat] `w%d world dari %s", count, path))
     notifyUser(string.format("Berhasil muat %d world", count))
-    if updateWorldDisplayList then pcall(updateWorldDisplayList) end
+    updateWorldDisplayList()
     return true
 end
 
@@ -453,12 +557,12 @@ local function loadStoragesFromFile()
     savePrefs(CFG)
     addLog(string.format("`2[Berhasil Muat] `w%d gudang dari %s", count, path))
     notifyUser(string.format("Berhasil muat %d gudang", count))
-    if updateStorageDisplayList then pcall(updateStorageDisplayList) end
+    updateStorageDisplayList()
     return true
 end
 
 -- ============================================================================
--- 5. INVENTORY & BOT HELPERS
+-- 6. INVENTORY & BOT HELPERS
 -- ============================================================================
 local function getInvCount(itemID)
     itemID = tonumber(itemID) or 0
@@ -556,7 +660,7 @@ local function wrenchTile(tx, ty)
 end
 
 -- ============================================================================
--- 6. MOVEMENT & PATHFINDING
+-- 7. MOVEMENT & PATHFINDING
 -- ============================================================================
 local function isTileSafe(tx, ty)
     if tx < 0 or tx > 99 or ty < 0 or ty > 59 then return false end
@@ -627,7 +731,7 @@ local function moveSafeTo(tx, ty)
 end
 
 -- ============================================================================
--- 7. TILE ACTIONS & VALIDATION
+-- 8. TILE ACTIONS & VALIDATION
 -- ============================================================================
 local function breakTileAt(tx, ty)
     if tx < 0 or tx > 99 or ty < 0 or ty > 59 then return false end
@@ -672,7 +776,6 @@ local function placeTileAt(tx, ty, itemID)
         local px, py = getPlayerPos()
         local dist = math.max(math.abs(px - tx), math.abs(py - ty))
         if dist > 2 or (px == tx and py == ty) then
-            -- Cari petak samping yang aman untuk berdiri
             if isTileSafe(tx - 1, ty) then
                 moveSafeTo(tx - 1, ty)
             elseif isTileSafe(tx + 1, ty) then
@@ -695,11 +798,8 @@ local function placeTileAt(tx, ty, itemID)
 end
 
 -- ============================================================================
--- 8. LOCK ENCLOSURE ENGINE (SESUAI GAMBAR 2)
+-- 9. LOCK ENCLOSURE ENGINE (SESUAI GAMBAR 2)
 -- ============================================================================
--- Layout Relatif terhadap Main White Door di (doorX, doorY):
---   (doorX - 2, doorY - 1) : Wooden Door (ID 12)  | (doorX - 1, doorY - 1) : Small Lock (ID 202)    | (doorX, doorY - 1) : Blocker / Air Vent (ID 828)
---   (doorX - 2, doorY)     : World Lock (ID 242)   | (doorX - 1, doorY)     : Signal Jammer (ID 226) | (doorX, doorY)     : White Door (ID 6)
 local function buildLockEnclosure()
     if not CFG.enable_lock_enclosure then
         addLog("`e[Enclosure] `0Pengaman lock dilewati (dinonaktifkan oleh user).")
@@ -725,7 +825,7 @@ local function buildLockEnclosure()
     end
     addLog(string.format("`2[Enclosure] `wWhite Door terdeteksi di (%d, %d)", doorX, doorY))
 
-    -- 1. Bersihkan petak di sekitar White Door sebelum memasang
+    -- 1. Bersihkan petak di sekitar White Door
     local spotsToClear = {
         { doorX, doorY - 1 },
         { doorX - 1, doorY },
@@ -756,7 +856,6 @@ local function buildLockEnclosure()
     -- 4. Pasang Small Lock di (doorX - 1, doorY - 1)
     addLog("`9[Enclosure] `0Memasang Small Lock...")
     if placeTileAt(doorX - 1, doorY - 1, CFG.lock_id_sl) then
-        -- Recalc / Reapply lock agar mengunci area pintu
         safeSleep(300)
         wrenchTile(doorX - 1, doorY - 1)
         safeSleep(300)
@@ -798,7 +897,7 @@ local function buildLockEnclosure()
 end
 
 -- ============================================================================
--- 9. WATER COLUMN ELEVATOR ENGINE (SESUAI GAMBAR 1)
+-- 10. WATER COLUMN ELEVATOR ENGINE (SESUAI GAMBAR 1)
 -- ============================================================================
 local function buildWaterColumn()
     if not CFG.enable_water_column then
@@ -812,7 +911,6 @@ local function buildWaterColumn()
         if not STATE.running or STATE.paused then break end
         local ok, t = pcall(getTile, wx, wy)
         if ok and t and t.fg ~= CFG.water_item_id and t.fg ~= 8 and t.fg ~= 6 then
-            -- Cek sisa water di tas
             if getInvCount(CFG.water_item_id) <= 0 then
                 addLog("`e[Water Habis] `0Sisa item water habis di tas. Melanjutkan layout...")
                 break
@@ -825,7 +923,7 @@ local function buildWaterColumn()
 end
 
 -- ============================================================================
--- 10. SOIL ROW PLACEMENT ENGINE (SESUAI GAMBAR 1)
+-- 11. SOIL ROW PLACEMENT ENGINE (SESUAI GAMBAR 1)
 -- ============================================================================
 local function placeSoilRows(onNeedRestockCallback)
     addLog(string.format("`9[Place Rows] `0Memulai penempatan baris block (ID: %d - %s)...", CFG.block_id, getItemNameSafe(CFG.block_id)))
@@ -836,7 +934,6 @@ local function placeSoilRows(onNeedRestockCallback)
         rowIdx = rowIdx + 1
         STATE.active_row = y
 
-        -- Pola Sinuous (kiri-ke-kanan lalu kanan-ke-kiri)
         local startX, endX, stepX
         if rowIdx % 2 == 1 then
             startX, endX, stepX = CFG.row_start_x, CFG.row_end_x, 1
@@ -851,7 +948,6 @@ local function placeSoilRows(onNeedRestockCallback)
 
             local ok, t = pcall(getTile, x, y)
             if ok and t and t.fg ~= CFG.block_id and t.fg ~= 8 and t.fg ~= 6 then
-                -- Cek apakah sisa block di tas sudah di bawah batas restock
                 local curCount = getInvCount(CFG.block_id)
                 if curCount < CFG.restock_threshold then
                     addLog(string.format("`e[Restock Diperlukan] `0Sisa block di tas (%d) < batas (%d). Menuju gudang...", curCount, CFG.restock_threshold))
@@ -864,9 +960,11 @@ local function placeSoilRows(onNeedRestockCallback)
                     end
                 end
 
-                -- Pasang block di (x, y)
                 if placeTileAt(x, y, CFG.block_id) then
                     STATE.total_placed_blocks = STATE.total_placed_blocks + 1
+                    if STATE.total_placed_blocks % 50 == 0 then
+                        updatePowerStatusList()
+                    end
                 end
             end
 
@@ -875,11 +973,12 @@ local function placeSoilRows(onNeedRestockCallback)
     end
 
     addLog(string.format("`2[Place Rows Selesai] `wTotal block terpasang: %d", STATE.total_placed_blocks))
+    updatePowerStatusList()
     return true
 end
 
 -- ============================================================================
--- 11. BLAST & RANDOM WORLD SEARCH ENGINE
+-- 12. BLAST & RANDOM WORLD SEARCH ENGINE
 -- ============================================================================
 local function generateRandomWorldName(letterCount, withNum, prefix)
     prefix = prefix or ""
@@ -946,7 +1045,7 @@ local function isWorldCleanAndUnowned()
     for _, t in pairs(tiles) do
         for _, lk in ipairs(LOCK_IDS) do
             if t.fg == lk then
-                return false -- Ada lock milik orang lain
+                return false
             end
         end
     end
@@ -963,12 +1062,10 @@ local function executeWorldBlast()
     end
 
     local px, py = getPlayerPos()
-    -- Pasang / gunakan blast di petak dekat player
     local targetX, targetY = px + 1, py
     placeTileAt(targetX, targetY, CFG.blast_item_id)
     safeSleep(500)
 
-    -- Handle dialog konfirmasi blast jika muncul
     if sendPacket then
         pcall(sendPacket, 2, "action|dialog_return\ndialog_name|use_blast\nbuttonClicked|blast")
         pcall(sendPacket, 2, "action|dialog_return\ndialog_name|blast_confirm\nbuttonClicked|yes")
@@ -980,7 +1077,7 @@ local function executeWorldBlast()
 end
 
 -- ============================================================================
--- 12. MULTI-STORAGE RESTOCK ENGINE
+-- 13. MULTI-STORAGE RESTOCK ENGINE
 -- ============================================================================
 local function restockFromStorage(resumeX, resumeY)
     if #CFG.storage_list == 0 then
@@ -997,13 +1094,10 @@ local function restockFromStorage(resumeX, resumeY)
         if warpToWorld(stor.name, stor.door) then
             safeSleep(1500)
 
-            -- Scan floating objects di gudang
             local objs = (getObjects and getObjects()) or (getBot and getBot().getWorld and getBot():getWorld().getObjects and getBot():getWorld():getObjects())
-            local foundItem = false
             if objs then
                 for _, obj in pairs(objs) do
                     if obj.id == CFG.block_id then
-                        foundItem = true
                         local ox = math.floor((obj.posX or obj.x or 0) / 32)
                         local oy = math.floor((obj.posY or obj.y or 0) / 32)
                         addLog(string.format("`2[Gudang] `wDitemukan floating block di (%d, %d). Mengambil...", ox, oy))
@@ -1018,7 +1112,6 @@ local function restockFromStorage(resumeX, resumeY)
                 end
             end
 
-            -- Cek juga apakah butuh mengambil item pengaman / blast jika habis
             if CFG.enable_lock_enclosure then
                 local secItems = { CFG.lock_id_wl, CFG.lock_id_sl, CFG.lock_id_jammer, CFG.lock_id_blocker, CFG.lock_id_door }
                 for _, sId in ipairs(secItems) do
@@ -1038,7 +1131,6 @@ local function restockFromStorage(resumeX, resumeY)
                 end
             end
 
-            -- Jika tas sudah terisi block > threshold, kembali ke world farm!
             if getInvCount(CFG.block_id) >= CFG.restock_threshold then
                 addLog(string.format("`2[Gudang Sukses] `wBerhasil restock %d block. Kembali ke %s...", getInvCount(CFG.block_id), currentFarm))
                 warpToWorld(currentFarm, currentFarmDoor)
@@ -1056,22 +1148,21 @@ local function restockFromStorage(resumeX, resumeY)
 end
 
 -- ============================================================================
--- 13. MAIN PROCESS DISPATCHER
+-- 14. MAIN PROCESS DISPATCHER
 -- ============================================================================
 local function runSingleFarmWorld(worldName, doorID)
     STATE.current_world = worldName
     STATE.current_door = doorID or ""
-    STATE.status_text = "Mempersiapkan World: " .. worldName
+    STATE.status_text = "Mempersiapkan: " .. worldName
+    updatePowerStatusList()
     addLog(string.format("`2========================================`0"))
     addLog(string.format("`2[Mulai World] `wMemproses Farm World: %s", worldName))
 
-    -- 1. Warp ke World
     if not warpToWorld(worldName, doorID) then
         addLog(string.format("`4[Gagal Warp] `oTidak dapat memasuki world %s", worldName))
         return false
     end
 
-    -- 2. Cek apakah world unowned (jika mode blast aktif)
     if CFG.auto_use_blast then
         if not isWorldCleanAndUnowned() then
             addLog("`e[World Terkunci] `0World ini sudah ada pemiliknya. Melewati...")
@@ -1080,13 +1171,9 @@ local function runSingleFarmWorld(worldName, doorID)
         executeWorldBlast()
     end
 
-    -- 3. Bangun Pengaman Lock (Sesuai Gambar 2)
     buildLockEnclosure()
-
-    -- 4. Bangun Kolom Water Elevator (Sesuai Gambar 1)
     buildWaterColumn()
 
-    -- 5. Taruh Baris-Baris Block Soil (Sesuai Gambar 1)
     local okRows = placeSoilRows(function(resX, resY)
         return restockFromStorage(resX, resY)
     end)
@@ -1095,6 +1182,7 @@ local function runSingleFarmWorld(worldName, doorID)
         STATE.total_worlds_completed = STATE.total_worlds_completed + 1
         addLog(string.format("`2[World Selesai] `w%s sukses dibangun 100%%!", worldName))
         sendWebhookNotification("🌱 Farm World Selesai", string.format("World: **%s**\nTotal Block: **%d**\nTotal World Selesai: **%d**", worldName, STATE.total_placed_blocks, STATE.total_worlds_completed))
+        updatePowerStatusList()
         return true
     end
     return false
@@ -1104,9 +1192,9 @@ local function autoSoilMainLoop()
     STATE.running = true
     STATE.paused = false
     addLog("`2[Bot Dimulai] `wAuto Soil Builder resmi berjalan.")
+    updatePowerStatusList()
 
     if CFG.world_mode == "RANDOM" then
-        -- Mode Cari & Blast Otomatis
         addLog(string.format("`9[Mode Random] `0Mencari %d world acak...", CFG.random_target_count))
         local found = 0
         while STATE.running and found < CFG.random_target_count do
@@ -1117,14 +1205,15 @@ local function autoSoilMainLoop()
                 table.insert(CFG.farm_world_list, { name = rndWorld, door = CFG.farm_door_id, done = true })
                 savePrefs(CFG)
                 saveWorldsToFile()
+                updateWorldDisplayList()
             end
             safeSleep(1500)
         end
     else
-        -- Mode Manual List
         if #CFG.farm_world_list == 0 then
             addLog("`4[Daftar Kosong] `oDaftar Farm World kosong! Tambahkan world di Tab 1 atau klik Muat dari Download.")
             STATE.running = false
+            updatePowerStatusList()
             return
         end
 
@@ -1138,7 +1227,7 @@ local function autoSoilMainLoop()
                     wEntry.done = true
                     savePrefs(CFG)
                     saveWorldsToFile()
-                    if updateWorldDisplayList then pcall(updateWorldDisplayList) end
+                    updateWorldDisplayList()
                 end
             end
             safeSleep(2000)
@@ -1148,11 +1237,12 @@ local function autoSoilMainLoop()
     STATE.running = false
     STATE.status_text = "SELESAI"
     addLog("`2[Semua Selesai] `wSeluruh world telah berhasil diselesaikan!")
+    updatePowerStatusList()
     notifyUser("Auto Soil Builder Selesai!")
 end
 
 -- ============================================================================
--- 14. UNIFIED DIALOG MANAGERS (WORLD FARM & GUDANG)
+-- 15. UNIFIED DIALOG MANAGERS (WORLD FARM & GUDANG)
 -- ============================================================================
 local function safeSendRawDialog(dText)
     if growtopia and growtopia.sendDialog then
@@ -1177,7 +1267,6 @@ local function openUnifiedWorldManager()
     table.insert(dLines, "add_text_input|as_dlg_add_door|Door ID (Opsional):||24|")
     table.insert(dLines, "add_button|as_dlg_btn_add|➕ Tambah World ke Antrean|noflags|0|0|")
     table.insert(dLines, "add_spacer|small|")
-    table.insert(dLines, "add_button|as_dlg_btn_paste|📋 Tempel Banyak World (Format Bebas)|noflags|0|0|")
     table.insert(dLines, "add_button|as_dlg_btn_copy|📄 Salin Semua ke Clipboard|noflags|0|0|")
     table.insert(dLines, "add_button|as_dlg_btn_clear|🗑️ Bersihkan Semua World|noflags|0|0|")
     table.insert(dLines, "add_spacer|small|")
@@ -1197,7 +1286,6 @@ local function openUnifiedStorageManager()
     table.insert(dLines, "add_text_input|as_dlg_add_stor_door|Door ID Gudang:||24|")
     table.insert(dLines, "add_button|as_dlg_btn_add_stor|➕ Tambah Gudang|noflags|0|0|")
     table.insert(dLines, "add_spacer|small|")
-    table.insert(dLines, "add_button|as_dlg_btn_paste_stor|📋 Tempel Banyak Gudang|noflags|0|0|")
     table.insert(dLines, "add_button|as_dlg_btn_copy_stor|📄 Salin Semua Gudang|noflags|0|0|")
     table.insert(dLines, "add_button|as_dlg_btn_clear_stor|🗑️ Bersihkan Gudang|noflags|0|0|")
     table.insert(dLines, "add_spacer|small|")
@@ -1210,13 +1298,11 @@ local function handleSoilDialog(var)
     if not var or not var.get then return false end
     local v0 = var:get(0)
     local v1 = var:get(1)
-    local v2 = var:get(2)
     local dName = (v0 and v0.getString and v0:getString()) or ""
     local dText = (v1 and v1.getString and v1:getString()) or ""
 
     if dName == "OnDialogRequest" then return false end
 
-    -- Dialog World Farm
     if dText:find("boren_soil_world_mgr") then
         if dText:find("buttonClicked|as_dlg_btn_add") then
             local nw = dText:match("as_dlg_add_world|([^|\n\r]+)")
@@ -1225,6 +1311,7 @@ local function handleSoilDialog(var)
                 table.insert(CFG.farm_world_list, { name = nw:upper():match("^%s*(.-)%s*$"), door = nd:upper():match("^%s*(.-)%s*$"), done = false })
                 savePrefs(CFG)
                 saveWorldsToFile()
+                updateWorldDisplayList()
                 addLog("`2[Tambah World] `wWorld " .. nw:upper() .. " ditambahkan.")
             end
             openUnifiedWorldManager()
@@ -1233,6 +1320,7 @@ local function handleSoilDialog(var)
             CFG.farm_world_list = {}
             savePrefs(CFG)
             saveWorldsToFile()
+            updateWorldDisplayList()
             addLog("`4[Bersihkan World] `oDaftar world dikosongkan.")
             openUnifiedWorldManager()
             return true
@@ -1249,7 +1337,6 @@ local function handleSoilDialog(var)
         end
     end
 
-    -- Dialog Storage
     if dText:find("boren_soil_stor_mgr") then
         if dText:find("buttonClicked|as_dlg_btn_add_stor") then
             local ns = dText:match("as_dlg_add_stor|([^|\n\r]+)")
@@ -1258,6 +1345,7 @@ local function handleSoilDialog(var)
                 table.insert(CFG.storage_list, { name = ns:upper():match("^%s*(.-)%s*$"), door = nd:upper():match("^%s*(.-)%s*$") })
                 savePrefs(CFG)
                 saveStoragesToFile()
+                updateStorageDisplayList()
                 addLog("`2[Tambah Gudang] `wGudang " .. ns:upper() .. " ditambahkan.")
             end
             openUnifiedStorageManager()
@@ -1266,8 +1354,19 @@ local function handleSoilDialog(var)
             CFG.storage_list = {}
             savePrefs(CFG)
             saveStoragesToFile()
+            updateStorageDisplayList()
             addLog("`4[Bersihkan Gudang] `oDaftar gudang dikosongkan.")
             openUnifiedStorageManager()
+            return true
+        elseif dText:find("buttonClicked|as_dlg_btn_copy_stor") then
+            local out = {}
+            for _, s in ipairs(CFG.storage_list) do
+                table.insert(out, s.name .. ((s.door and s.door ~= "") and ("|" .. s.door) or ""))
+            end
+            if ImGui and ImGui.SetClipboardText then
+                ImGui.SetClipboardText(table.concat(out, "\n"))
+            end
+            notifyUser("Daftar gudang disalin ke clipboard!")
             return true
         end
     end
@@ -1276,247 +1375,325 @@ local function handleSoilDialog(var)
 end
 
 -- ============================================================================
--- 15. NATIVE GROWLAUNCHER UI BUILDER
+-- 16. NATIVE GROWLAUNCHER UI BUILDER (STANDAR RESMI GROWLAUNCHER APK)
 -- ============================================================================
-local function initSoilBuilderUI()
+local function createNativeUI(subName, iconName)
+    if UserInterface and UserInterface.new then
+        return UserInterface.new(subName, iconName)
+    end
+    local ui = { sub_name = subName, icon = iconName, menu = {} }
+    function ui:addLabelApp(text, icon) table.insert(self.menu, { type = "labelapp", text = text, icon = icon or "" }) return self end
+    function ui:addLabel(text) table.insert(self.menu, { type = "label", text = text }) return self end
+    function ui:addDivider() table.insert(self.menu, { type = "divider" }) return self end
+    function ui:addToggle(text, default, alias, autosave) table.insert(self.menu, { type = "toggle", text = text, default = default == true, alias = alias, autosave = autosave == true }) return self end
+    function ui:addToggleButton(text, default, alias) table.insert(self.menu, { type = "toggle_button", text = text, default = default == true, alias = alias }) return self end
+    function ui:addButton(text, alias) table.insert(self.menu, { type = "button", text = text, alias = alias }) return self end
+    function ui:addInputString(text, default, label, placeholder, icon, alias) table.insert(self.menu, { type = "input_string", text = text, default = default or "", label = label or "Text", placeholder = placeholder or "", icon = icon or "", alias = alias }) return self end
+    function ui:addInputInt(text, default, label, placeholder, icon, alias) table.insert(self.menu, { type = "input_int", text = text, default = tostring(default or "0"), label = label or "Value", placeholder = placeholder or "0", icon = icon or "", alias = alias }) return self end
+    function ui:addSlider(text, minVal, maxVal, defaultVal, stepVal, useDot, alias) table.insert(self.menu, { type = "slider", text = text, min = minVal, max = maxVal, default = defaultVal, step = stepVal, use_dot = useDot == true, alias = alias }) return self end
+    function ui:addTooltip(text, supportText, icon, background) table.insert(self.menu, { type = "tooltip", text = text, support_text = supportText or "", icon = icon or "Info", background = background == true }) return self end
+    function ui:addItemPicker(text, item, default, alias) table.insert(self.menu, { type = "item_picker", text = text, item = item or "Blank", default = tostring(default or "0"), alias = alias }) return self end
+    function ui:addDisplayList(text, displayType, alias) table.insert(self.menu, { type = "display_list", text = text, default = displayType or "Default", alias = alias }) return self end
+    function ui:generateJSON()
+        return jsonEncode({ sub_name = self.sub_name, icon = self.icon, menu = self.menu })
+    end
+    return ui
+end
+
+local function registerNativeSoilUI()
     if not addCategory or not addIntoModule then
-        addLog("`4[UI Warning] `oFungsi Native UI Growlauncher tidak terdeteksi.")
+        addLog("`4[UI Warning] `oFungsi addCategory / addIntoModule tidak terdeteksi.")
         return
     end
 
-    addCategory("Boren Store")
+    -- Tab 1: Start & World Farm
+    local uiWorld = createNativeUI("1. Start & World", "PlayArrow")
+    uiWorld:addLabelApp("Boren Soil - Auto Builder", "Grass")
+    uiWorld:addToggleButton("▶ START BOT (Mulai Pasang)", false, "as_run_power")
+    uiWorld:addButton("■ STOP BOT", "as_btn_stop")
+    uiWorld:addToggle("Pause Bot", false, "as_pause_toggle", false)
+    uiWorld:addDisplayList("Status Bot", "Default", "as_power_status_list")
+    uiWorld:addDivider()
+    uiWorld:addLabel("Antrean Farm World:")
+    uiWorld:addInputString("Nama World", "", "World", "WORLD1", "Public", "as_input_add_world")
+    uiWorld:addInputString("Door ID (Opsional)", "", "Door ID", "Kosong = White Door", "DoorFront", "as_input_add_door")
+    uiWorld:addButton("➕ Tambah World ke Antrean", "as_btn_add_world")
+    uiWorld:addButton("📋 Kelola / Edit, Salin & Tempel World", "as_btn_manage_worlds")
+    uiWorld:addButton("🗑️ Kosongkan Antrean World", "as_btn_clear_worlds")
+    uiWorld:addDivider()
+    uiWorld:addLabel("Cadangan File (Folder Download HP):")
+    uiWorld:addButton("📥 Simpan Antrean ke Download", "as_btn_save_worlds")
+    uiWorld:addButton("📤 Muat Antrean dari Download", "as_btn_load_worlds")
+    uiWorld:addDisplayList("Daftar Farm World", "Default", "as_world_display_list")
+    uiWorld:addDivider()
+    uiWorld:addLabel("Cari & Blast Otomatis (Opsional):")
+    uiWorld:addToggle("Mode Random World", CFG.world_mode == "RANDOM", "as_chk_mode_random", true)
+    uiWorld:addSlider("Panjang Huruf Random", 4, 12, CFG.random_letter_count, 1, false, "as_in_rnd_len")
+    uiWorld:addToggle("Sertakan Angka (0-9)", CFG.random_with_number, "as_chk_rnd_num", true)
+    uiWorld:addInputString("Prefix World", CFG.random_prefix, "Prefix", "Kosongkan jika acak", "Label", "as_in_rnd_prefix")
+    uiWorld:addInputInt("Target Jumlah World", tostring(CFG.random_target_count), "Target", "20", "FormatListNumbered", "as_in_rnd_target")
+    uiWorld:addDivider()
+    uiWorld:addLabel("Auto Use Blast (Opsional):")
+    uiWorld:addToggle("Gunakan Blast di World Baru", CFG.auto_use_blast, "as_chk_auto_blast", true)
+    uiWorld:addInputInt("ID Item Blast", tostring(CFG.blast_item_id), "Blast ID", "1336 (World) / 2810 (Cave)", "Tag", "as_in_blast_id")
 
-    -- ------------------------------------------------------------------------
-    -- TAB 1: Mulai & Farm World
-    -- ------------------------------------------------------------------------
-    addIntoModule("🌱 Auto Soil Builder", "🌱 Mulai & Farm World", function(ui)
-        ui:addLabel("=== STATUS BOT & KONTROL UTAMA ===")
-        ui:addButton("▶️ JALANKAN BOT", "as_btn_start")
-        ui:addButton("⏸️ JEDA / LANJUT", "as_btn_pause")
-        ui:addButton("⏹️ HENTIKAN BOT", "as_btn_stop")
-        ui:addSpacer()
+    -- Tab 2: Lock & Door (Sesuai Gambar 2)
+    local uiLock = createNativeUI("2. Lock & Door", "Lock")
+    uiLock:addLabelApp("Pengaman Pintu (Gambar 2)", "Lock")
+    uiLock:addTooltip("Posisi Lock", "White Door (kanan-bawah), Air Vent (kanan-atas), SL (tengah-atas), Jammer (tengah-bawah), Wooden Door (kiri-atas), WL (kiri-bawah).", "Verified", false)
+    uiLock:addToggle("Aktifkan Pengaman Lock", CFG.enable_lock_enclosure, "as_chk_enable_lock", true)
+    uiLock:addDivider()
+    uiLock:addInputInt("ID World Lock (Kiri Bawah)", tostring(CFG.lock_id_wl), "ID WL", "242", "Lock", "as_in_id_wl")
+    uiLock:addToggle("World Lock Public", CFG.wl_make_public, "as_chk_wl_public", true)
+    uiLock:addDivider()
+    uiLock:addInputInt("ID Small Lock (Tengah Atas)", tostring(CFG.lock_id_sl), "ID SL", "202", "Lock", "as_in_id_sl")
+    uiLock:addDivider()
+    uiLock:addInputInt("ID Signal Jammer (Tengah Bawah)", tostring(CFG.lock_id_jammer), "ID Jammer", "226", "WifiTethering", "as_in_id_jammer")
+    uiLock:addDivider()
+    uiLock:addInputInt("ID Blocker Door (Atas White Door)", tostring(CFG.lock_id_blocker), "ID Blocker", "828 (Air Vent)", "DoorFront", "as_in_id_blocker")
+    uiLock:addDivider()
+    uiLock:addInputInt("ID Wooden Door (Kiri Atas)", tostring(CFG.lock_id_door), "ID Door", "12 (Wooden Door)", "DoorFront", "as_in_id_door")
+    uiLock:addInputString("Door ID Farm", CFG.farm_door_id, "Door ID", "BOREN", "Label", "as_in_door_label")
+    uiLock:addButton("💾 Simpan Pengaturan Lock", "as_btn_save_lock_cfg")
 
-        ui:addLabel("=== MODE WORLD FARM ===")
-        ui:addCheckbox("Cari & Blast Otomatis (Random Search)", CFG.world_mode == "RANDOM", "as_chk_mode_random")
-        ui:addInputInt("Panjang Huruf Random", CFG.random_letter_count, "as_in_rnd_len")
-        ui:addCheckbox("Sertakan Angka (0-9) di Nama World", CFG.random_with_number, "as_chk_rnd_num")
-        ui:addInputText("Prefix Nama World (Opsional)", CFG.random_prefix, "as_in_rnd_prefix")
-        ui:addInputInt("Target Jumlah World", CFG.random_target_count, "as_in_rnd_target")
-        ui:addSpacer()
+    -- Tab 3: Storage Gudang
+    local uiStorage = createNativeUI("3. Storage Gudang", "Inventory")
+    uiStorage:addLabelApp("Multi-Storage Gudang", "Inventory")
+    uiStorage:addInputString("Nama Gudang", "", "World", "GUDANG1", "Inventory", "as_input_add_stor")
+    uiStorage:addInputString("Door Gudang", "", "Door ID", "DOOR123", "DoorFront", "as_input_add_stor_door")
+    uiStorage:addButton("➕ Tambah Gudang", "as_btn_add_stor_direct")
+    uiStorage:addButton("📋 Kelola / Edit, Salin & Tempel Gudang", "as_btn_manage_storages")
+    uiStorage:addButton("🗑️ Kosongkan Gudang", "as_btn_clear_stor_direct")
+    uiStorage:addDivider()
+    uiStorage:addLabel("Cadangan File Gudang (Folder Download):")
+    uiStorage:addButton("📥 Simpan Gudang ke Download", "as_btn_save_storages")
+    uiStorage:addButton("📤 Muat Gudang dari Download", "as_btn_load_storages")
+    uiStorage:addDisplayList("Daftar Gudang Storage", "Default", "as_stor_display_list")
+    uiStorage:addDivider()
+    uiStorage:addSlider("Ambil Block Jika Sisa <=", 10, 100, CFG.restock_threshold, 5, false, "as_in_restock_thresh")
 
-        ui:addLabel("=== AUTO USE BLAST ===")
-        ui:addCheckbox("Gunakan Blast di World Baru (Opsional)", CFG.auto_use_blast, "as_chk_auto_blast")
-        ui:addInputInt("ID Item Blast (1336 / 2810)", CFG.blast_item_id, "as_in_blast_id")
-        ui:addLabel(string.format("Item Blast: %s (ID: %d)", getItemNameSafe(CFG.blast_item_id), CFG.blast_item_id))
-        ui:addSpacer()
+    -- Tab 4: Layout & Block (Sesuai Gambar 1)
+    local uiLayout = createNativeUI("4. Layout & Block", "Build")
+    uiLayout:addLabelApp("Layout Farm (Gambar 1)", "Build")
+    uiLayout:addLabel("Pilihan Block yang Ditaruh:")
+    uiLayout:addInputInt("ID Block", tostring(CFG.block_id), "ID Item", "2 (Dirt) / 100 (Soil) / 102 (Plat)", "Tag", "as_in_block_id")
+    uiLayout:addButton("💾 Simpan ID Block", "as_btn_save_block_id")
+    uiLayout:addDivider()
+    uiLayout:addLabel("Pola Baris (Gambar 1):")
+    uiLayout:addSlider("Jarak Baris (Row Step)", 1, 4, CFG.row_step, 1, false, "as_in_row_step")
+    uiLayout:addSlider("Baris Mulai Y", 1, 10, CFG.row_start_y, 1, false, "as_in_start_y")
+    uiLayout:addSlider("Baris Akhir Y", 40, 56, CFG.row_end_y, 1, false, "as_in_end_y")
+    uiLayout:addSlider("Kolom Mulai X", 0, 10, CFG.row_start_x, 1, false, "as_in_start_x")
+    uiLayout:addSlider("Kolom Akhir X", 80, 99, CFG.row_end_x, 1, false, "as_in_end_x")
+    uiLayout:addDivider()
+    uiLayout:addLabel("Kolom Water Elevator (Gambar 1):")
+    uiLayout:addToggle("Pasang Kolom Water di Sebelah Kiri", CFG.enable_water_column, "as_chk_enable_water", true)
+    uiLayout:addInputInt("ID Item Water", tostring(CFG.water_item_id), "Water ID", "822", "Water", "as_in_water_id")
+    uiLayout:addSlider("Kolom X Water", 0, 5, CFG.water_x, 1, false, "as_in_water_x")
+    uiLayout:addDivider()
+    uiLayout:addLabel("Kecepatan & Delay (ms):")
+    uiLayout:addSlider("Delay Taruh Block (ms)", 60, 400, CFG.delay_place, 10, false, "as_in_delay_place")
+    uiLayout:addSlider("Delay Jalan (ms)", 80, 500, CFG.delay_walk, 10, false, "as_in_delay_walk")
+    uiLayout:addSlider("Delay Pukul (ms)", 80, 400, CFG.delay_punch, 10, false, "as_in_delay_punch")
 
-        ui:addLabel("=== MANAJEMEN ANTREAN WORLD ===")
-        ui:addButton("📋 Kelola Daftar Farm World", "as_btn_manage_worlds")
-        ui:addButton("💾 Simpan Antrean ke Download", "as_btn_save_worlds")
-        ui:addButton("📤 Muat Antrean dari Download", "as_btn_load_worlds")
-        ui:addSpacer()
-        ui:addDisplayList("Daftar Farm World", "Default", "as_world_display_list")
-    end)
+    -- Tab 5: Console & Status
+    local uiConsole = createNativeUI("5. Console & Status", "Terminal")
+    uiConsole:addLabelApp("Console & Log Aktivitas", "Terminal")
+    uiConsole:addDisplayList("Status Bot Real-time", "Default", "as_power_status_list")
+    uiConsole:addDivider()
+    uiConsole:addButton("🗑️ Bersihkan Catatan Log", "as_btn_clear_log")
+    uiConsole:addDisplayList("Catatan Aktivitas", "Default", "as_log_display_list")
 
-    -- ------------------------------------------------------------------------
-    -- TAB 2: Kunci & Pengaman (Sesuai Gambar 2)
-    -- ------------------------------------------------------------------------
-    addIntoModule("🌱 Auto Soil Builder", "🔒 Kunci & Pengaman (Gambar 2)", function(ui)
-        ui:addLabel("=== STRUKTUR PENGAMAN PINTU (GAMBAR 2) ===")
-        ui:addCheckbox("Aktifkan Pembuatan Pengaman Lock (Gambar 2)", CFG.enable_lock_enclosure, "as_chk_enable_lock")
-        ui:addSpacer()
-
-        ui:addLabel("Diagram Posisi (Relatif terhadap White Door):")
-        ui:addLabel("[ Wooden Door ] [ Small Lock ]    [ Air Vent ]")
-        ui:addLabel("[ World Lock  ] [ Signal Jammer ] [ White Door ]")
-        ui:addSpacer()
-
-        ui:addInputInt("ID World Lock (Kiri Bawah)", CFG.lock_id_wl, "as_in_id_wl")
-        ui:addInputInt("ID Small Lock (Tengah Atas)", CFG.lock_id_sl, "as_in_id_sl")
-        ui:addInputInt("ID Signal Jammer (Tengah Bawah)", CFG.lock_id_jammer, "as_in_id_jammer")
-        ui:addInputInt("ID Blocker Door / Air Vent (Atas White Door)", CFG.lock_id_blocker, "as_in_id_blocker")
-        ui:addInputInt("ID Wooden Door (Kiri Atas)", CFG.lock_id_door, "as_in_id_door")
-        ui:addInputText("Label / ID Door Masuk", CFG.farm_door_id, "as_in_door_label")
-        ui:addCheckbox("Jadikan World Lock Public", CFG.wl_make_public, "as_chk_wl_public")
-        ui:addSpacer()
-        ui:addButton("💾 Simpan Pengaturan Lock", "as_btn_save_lock_cfg")
-    end)
-
-    -- ------------------------------------------------------------------------
-    -- TAB 3: Gudang & Ambil Supply
-    -- ------------------------------------------------------------------------
-    addIntoModule("🌱 Auto Soil Builder", "📦 Gudang & Ambil Supply", function(ui)
-        ui:addLabel("=== PENGATURAN MULTI-STORAGE GUDANG ===")
-        ui:addButton("📋 Kelola Daftar Gudang Storage", "as_btn_manage_storages")
-        ui:addButton("💾 Simpan Daftar Gudang ke Download", "as_btn_save_storages")
-        ui:addButton("📤 Muat Daftar Gudang dari Download", "as_btn_load_storages")
-        ui:addSpacer()
-
-        ui:addInputInt("Batas Restock Block (Ambil jika sisa < X)", CFG.restock_threshold, "as_in_restock_thresh")
-        ui:addSpacer()
-        ui:addDisplayList("Daftar Gudang Storage", "Default", "as_stor_display_list")
-    end)
-
-    -- ------------------------------------------------------------------------
-    -- TAB 4: Layout & Penempatan Block
-    -- ------------------------------------------------------------------------
-    addIntoModule("🌱 Auto Soil Builder", "📐 Layout & Penempatan Block", function(ui)
-        ui:addLabel("=== PILIHAN BLOCK SOIL / PLATFORM ===")
-        ui:addInputInt("ID Block yang Ditaruh", CFG.block_id, "as_in_block_id")
-        ui:addLabel(string.format("Block Terpilih: %s (ID: %d)", getItemNameSafe(CFG.block_id), CFG.block_id))
-        ui:addButton("💾 Simpan ID Block", "as_btn_save_block_id")
-        ui:addSpacer()
-
-        ui:addLabel("=== PENGATURAN BARIS (GAMBAR 1) ===")
-        ui:addInputInt("Jarak Baris (Row Step, Default 2)", CFG.row_step, "as_in_row_step")
-        ui:addInputInt("Baris Mulai Y (Default 2)", CFG.row_start_y, "as_in_start_y")
-        ui:addInputInt("Baris Akhir Y (Default 54)", CFG.row_end_y, "as_in_end_y")
-        ui:addInputInt("Kolom Mulai X (Default 2)", CFG.row_start_x, "as_in_start_x")
-        ui:addInputInt("Kolom Akhir X (Default 99)", CFG.row_end_x, "as_in_end_x")
-        ui:addSpacer()
-
-        ui:addLabel("=== KOLOM WATER ELEVATOR (GAMBAR 1) ===")
-        ui:addCheckbox("Pasang Kolom Water di Sebelah Kiri (Gambar 1)", CFG.enable_water_column, "as_chk_enable_water")
-        ui:addInputInt("ID Item Water (Default 822)", CFG.water_item_id, "as_in_water_id")
-        ui:addInputInt("Kolom X Water (Default 0)", CFG.water_x, "as_in_water_x")
-        ui:addSpacer()
-
-        ui:addLabel("=== DELAY & PACING (MS) ===")
-        ui:addInputInt("Delay Taruh Block (ms)", CFG.delay_place, "as_in_delay_place")
-        ui:addInputInt("Delay Jalan (ms)", CFG.delay_walk, "as_in_delay_walk")
-        ui:addInputInt("Delay Pukul (ms)", CFG.delay_punch, "as_in_delay_punch")
-    end)
-
-    -- ------------------------------------------------------------------------
-    -- TAB 5: Console, Tas & Log
-    -- ------------------------------------------------------------------------
-    addIntoModule("🌱 Auto Soil Builder", "⚙️ Console, Tas & Log", function(ui)
-        ui:addLabel("=== STATUS BOT REAL-TIME ===")
-        ui:addLabel(string.format("Status: %s | World Aktif: %s", STATE.status_text, STATE.current_world ~= "" and STATE.current_world or "-"))
-        ui:addLabel(string.format("Total Block Terpasang: %d | Total World Selesai: %d", STATE.total_placed_blocks, STATE.total_worlds_completed))
-        ui:addSpacer()
-
-        ui:addLabel("=== LOG AKTIVITAS TERBARU ===")
-        ui:addDisplayList("Log Aktivitas", "Default", "as_log_display_list")
-        ui:addSpacer()
-        ui:addButton("🗑️ Bersihkan Log", "as_btn_clear_log")
-    end)
+    -- Registrasi Kategori & Sub-Menu ke GrowLauncher
+    pcall(addCategory, "Boren Soil", "Grass")
+    pcall(addIntoModule, uiWorld:generateJSON(), "Boren Soil")
+    pcall(addIntoModule, uiLock:generateJSON(), "Boren Soil")
+    pcall(addIntoModule, uiStorage:generateJSON(), "Boren Soil")
+    pcall(addIntoModule, uiLayout:generateJSON(), "Boren Soil")
+    pcall(addIntoModule, uiConsole:generateJSON(), "Boren Soil")
 end
 
 -- ============================================================================
--- 16. EVENT DISPATCHERS & VALUE HANDLERS
+-- 17. EVENT DISPATCHERS & VALUE HANDLERS
 -- ============================================================================
-local function handleSoilUIValue(ctrlName, val)
-    if not ctrlName or ctrlName == "" then return end
+local function toBoolVal(v)
+    return (v == true or v == 1 or v == "true" or v == "1")
+end
 
-    if ctrlName == "as_btn_start" then
-        if not STATE.running then
-            if async then
-                async(autoSoilMainLoop)
-            else
-                autoSoilMainLoop()
-            end
+local function handleSoilUIValue(typeVal, name, val)
+    local alias = name
+    local value = val
+    if type(typeVal) == "string" and (name == nil or type(name) ~= "string") then
+        alias = typeVal
+        value = name
+    end
+    if not alias or alias == "" then return end
+
+    if alias == "as_run_power" then
+        local state = toBoolVal(value)
+        if state and not STATE.running then
+            if async then async(autoSoilMainLoop) else autoSoilMainLoop() end
+        elseif not state and STATE.running then
+            STATE.running = false
+            STATE.paused = false
+            addLog("`4[Berhenti] `0Bot dihentikan oleh user.")
         end
-    elseif ctrlName == "as_btn_pause" then
-        STATE.paused = not STATE.paused
+        updatePowerStatusList()
+    elseif alias == "as_pause_toggle" then
+        STATE.paused = toBoolVal(value)
         addLog(STATE.paused and "`e[Jeda] `0Bot dijeda sementara." or "`2[Lanjut] `0Bot dilanjutkan.")
-    elseif ctrlName == "as_btn_stop" then
+        updatePowerStatusList()
+    elseif alias == "as_btn_stop" then
         STATE.running = false
         STATE.paused = false
-        addLog("`4[Berhenti] `0Bot dihentikan oleh user.")
-    elseif ctrlName == "as_chk_mode_random" then
-        CFG.world_mode = (val == "1" or val == "true" or val == true) and "RANDOM" or "MANUAL"
+        addLog("`4[Berhenti] `0Bot dihentikan.")
+        updatePowerStatusList()
+    elseif alias == "as_chk_mode_random" then
+        CFG.world_mode = toBoolVal(value) and "RANDOM" or "MANUAL"
         savePrefs(CFG)
-    elseif ctrlName == "as_in_rnd_len" then
-        CFG.random_letter_count = tonumber(val) or CFG.random_letter_count
+    elseif alias == "as_in_rnd_len" then
+        CFG.random_letter_count = tonumber(value) or CFG.random_letter_count
         savePrefs(CFG)
-    elseif ctrlName == "as_chk_rnd_num" then
-        CFG.random_with_number = (val == "1" or val == "true" or val == true)
+    elseif alias == "as_chk_rnd_num" then
+        CFG.random_with_number = toBoolVal(value)
         savePrefs(CFG)
-    elseif ctrlName == "as_in_rnd_prefix" then
-        CFG.random_prefix = tostring(val or "")
+    elseif alias == "as_in_rnd_prefix" then
+        CFG.random_prefix = tostring(value or "")
         savePrefs(CFG)
-    elseif ctrlName == "as_in_rnd_target" then
-        CFG.random_target_count = tonumber(val) or CFG.random_target_count
+    elseif alias == "as_in_rnd_target" then
+        CFG.random_target_count = tonumber(value) or CFG.random_target_count
         savePrefs(CFG)
-    elseif ctrlName == "as_chk_auto_blast" then
-        CFG.auto_use_blast = (val == "1" or val == "true" or val == true)
+    elseif alias == "as_chk_auto_blast" then
+        CFG.auto_use_blast = toBoolVal(value)
         savePrefs(CFG)
-    elseif ctrlName == "as_in_blast_id" then
-        CFG.blast_item_id = tonumber(val) or CFG.blast_item_id
+    elseif alias == "as_in_blast_id" then
+        CFG.blast_item_id = tonumber(value) or CFG.blast_item_id
         savePrefs(CFG)
-    elseif ctrlName == "as_btn_manage_worlds" then
-        openUnifiedWorldManager()
-    elseif ctrlName == "as_btn_save_worlds" then
+    elseif alias == "as_input_add_world" then
+        STATE.buf_new_world = tostring(value or ""):upper():match("^%s*(.-)%s*$")
+    elseif alias == "as_input_add_door" then
+        STATE.buf_new_door = tostring(value or ""):upper():match("^%s*(.-)%s*$")
+    elseif alias == "as_btn_add_world" then
+        if STATE.buf_new_world and STATE.buf_new_world ~= "" then
+            table.insert(CFG.farm_world_list, { name = STATE.buf_new_world, door = STATE.buf_new_door or "", done = false })
+            savePrefs(CFG)
+            saveWorldsToFile()
+            updateWorldDisplayList()
+            addLog("`2[Tambah World] `w" .. STATE.buf_new_world .. " ditambahkan.")
+            STATE.buf_new_world = ""
+            STATE.buf_new_door = ""
+        end
+    elseif alias == "as_btn_clear_worlds" then
+        CFG.farm_world_list = {}
+        savePrefs(CFG)
         saveWorldsToFile()
-    elseif ctrlName == "as_btn_load_worlds" then
+        updateWorldDisplayList()
+        addLog("`4[Bersihkan World] `oAntrean world dikosongkan.")
+    elseif alias == "as_btn_manage_worlds" then
+        openUnifiedWorldManager()
+    elseif alias == "as_btn_save_worlds" then
+        saveWorldsToFile()
+    elseif alias == "as_btn_load_worlds" then
         loadWorldsFromFile()
-    elseif ctrlName == "as_chk_enable_lock" then
-        CFG.enable_lock_enclosure = (val == "1" or val == "true" or val == true)
+    elseif alias == "as_chk_enable_lock" then
+        CFG.enable_lock_enclosure = toBoolVal(value)
         savePrefs(CFG)
-    elseif ctrlName == "as_in_id_wl" then
-        CFG.lock_id_wl = tonumber(val) or CFG.lock_id_wl
-    elseif ctrlName == "as_in_id_sl" then
-        CFG.lock_id_sl = tonumber(val) or CFG.lock_id_sl
-    elseif ctrlName == "as_in_id_jammer" then
-        CFG.lock_id_jammer = tonumber(val) or CFG.lock_id_jammer
-    elseif ctrlName == "as_in_id_blocker" then
-        CFG.lock_id_blocker = tonumber(val) or CFG.lock_id_blocker
-    elseif ctrlName == "as_in_id_door" then
-        CFG.lock_id_door = tonumber(val) or CFG.lock_id_door
-    elseif ctrlName == "as_in_door_label" then
-        CFG.farm_door_id = tostring(val or "")
-    elseif ctrlName == "as_chk_wl_public" then
-        CFG.wl_make_public = (val == "1" or val == "true" or val == true)
-    elseif ctrlName == "as_btn_save_lock_cfg" then
+    elseif alias == "as_in_id_wl" then
+        CFG.lock_id_wl = tonumber(value) or CFG.lock_id_wl
+    elseif alias == "as_in_id_sl" then
+        CFG.lock_id_sl = tonumber(value) or CFG.lock_id_sl
+    elseif alias == "as_in_id_jammer" then
+        CFG.lock_id_jammer = tonumber(value) or CFG.lock_id_jammer
+    elseif alias == "as_in_id_blocker" then
+        CFG.lock_id_blocker = tonumber(value) or CFG.lock_id_blocker
+    elseif alias == "as_in_id_door" then
+        CFG.lock_id_door = tonumber(value) or CFG.lock_id_door
+    elseif alias == "as_in_door_label" then
+        CFG.farm_door_id = tostring(value or "")
+    elseif alias == "as_chk_wl_public" then
+        CFG.wl_make_public = toBoolVal(value)
+    elseif alias == "as_btn_save_lock_cfg" then
         savePrefs(CFG)
         notifyUser("Pengaturan Lock berhasil disimpan!")
         addLog("`2[Simpan Lock] `wPengaturan pengaman Gambar 2 disimpan.")
-    elseif ctrlName == "as_btn_manage_storages" then
-        openUnifiedStorageManager()
-    elseif ctrlName == "as_btn_save_storages" then
-        saveStoragesToFile()
-    elseif ctrlName == "as_btn_load_storages" then
-        loadStoragesFromFile()
-    elseif ctrlName == "as_in_restock_thresh" then
-        CFG.restock_threshold = tonumber(val) or CFG.restock_threshold
+    elseif alias == "as_input_add_stor" then
+        STATE.buf_new_stor = tostring(value or ""):upper():match("^%s*(.-)%s*$")
+    elseif alias == "as_input_add_stor_door" then
+        STATE.buf_new_stor_door = tostring(value or ""):upper():match("^%s*(.-)%s*$")
+    elseif alias == "as_btn_add_stor_direct" then
+        if STATE.buf_new_stor and STATE.buf_new_stor ~= "" then
+            table.insert(CFG.storage_list, { name = STATE.buf_new_stor, door = STATE.buf_new_stor_door or "" })
+            savePrefs(CFG)
+            saveStoragesToFile()
+            updateStorageDisplayList()
+            addLog("`2[Tambah Gudang] `w" .. STATE.buf_new_stor .. " ditambahkan.")
+            STATE.buf_new_stor = ""
+            STATE.buf_new_stor_door = ""
+        end
+    elseif alias == "as_btn_clear_stor_direct" then
+        CFG.storage_list = {}
         savePrefs(CFG)
-    elseif ctrlName == "as_in_block_id" then
-        CFG.block_id = tonumber(val) or CFG.block_id
-    elseif ctrlName == "as_btn_save_block_id" then
+        saveStoragesToFile()
+        updateStorageDisplayList()
+        addLog("`4[Bersihkan Gudang] `oDaftar gudang dikosongkan.")
+    elseif alias == "as_btn_manage_storages" then
+        openUnifiedStorageManager()
+    elseif alias == "as_btn_save_storages" then
+        saveStoragesToFile()
+    elseif alias == "as_btn_load_storages" then
+        loadStoragesFromFile()
+    elseif alias == "as_in_restock_thresh" then
+        CFG.restock_threshold = tonumber(value) or CFG.restock_threshold
+        savePrefs(CFG)
+    elseif alias == "as_in_block_id" then
+        CFG.block_id = tonumber(value) or CFG.block_id
+    elseif alias == "as_btn_save_block_id" then
         savePrefs(CFG)
         notifyUser(string.format("ID Block %d (%s) tersimpan!", CFG.block_id, getItemNameSafe(CFG.block_id)))
         addLog(string.format("`2[Simpan Block] `wID Block disetel ke %d (%s)", CFG.block_id, getItemNameSafe(CFG.block_id)))
-    elseif ctrlName == "as_in_row_step" then
-        CFG.row_step = tonumber(val) or CFG.row_step
+        updatePowerStatusList()
+    elseif alias == "as_in_row_step" then
+        CFG.row_step = tonumber(value) or CFG.row_step
         savePrefs(CFG)
-    elseif ctrlName == "as_chk_enable_water" then
-        CFG.enable_water_column = (val == "1" or val == "true" or val == true)
+    elseif alias == "as_in_start_y" then
+        CFG.row_start_y = tonumber(value) or CFG.row_start_y
         savePrefs(CFG)
-    elseif ctrlName == "as_in_water_id" then
-        CFG.water_item_id = tonumber(val) or CFG.water_item_id
+    elseif alias == "as_in_end_y" then
+        CFG.row_end_y = tonumber(value) or CFG.row_end_y
         savePrefs(CFG)
-    elseif ctrlName == "as_in_water_x" then
-        CFG.water_x = tonumber(val) or CFG.water_x
+    elseif alias == "as_in_start_x" then
+        CFG.row_start_x = tonumber(value) or CFG.row_start_x
         savePrefs(CFG)
-    elseif ctrlName == "as_in_delay_place" then
-        CFG.delay_place = tonumber(val) or CFG.delay_place
+    elseif alias == "as_in_end_x" then
+        CFG.row_end_x = tonumber(value) or CFG.row_end_x
         savePrefs(CFG)
-    elseif ctrlName == "as_in_delay_walk" then
-        CFG.delay_walk = tonumber(val) or CFG.delay_walk
+    elseif alias == "as_chk_enable_water" then
+        CFG.enable_water_column = toBoolVal(value)
         savePrefs(CFG)
-    elseif ctrlName == "as_in_delay_punch" then
-        CFG.delay_punch = tonumber(val) or CFG.delay_punch
+    elseif alias == "as_in_water_id" then
+        CFG.water_item_id = tonumber(value) or CFG.water_item_id
         savePrefs(CFG)
-    elseif ctrlName == "as_btn_clear_log" then
+    elseif alias == "as_in_water_x" then
+        CFG.water_x = tonumber(value) or CFG.water_x
+        savePrefs(CFG)
+    elseif alias == "as_in_delay_place" then
+        CFG.delay_place = tonumber(value) or CFG.delay_place
+        savePrefs(CFG)
+    elseif alias == "as_in_delay_walk" then
+        CFG.delay_walk = tonumber(value) or CFG.delay_walk
+        savePrefs(CFG)
+    elseif alias == "as_in_delay_punch" then
+        CFG.delay_punch = tonumber(value) or CFG.delay_punch
+        savePrefs(CFG)
+    elseif alias == "as_btn_clear_log" then
         STATE.log_messages = {}
-        if updateLogDisplayList then pcall(updateLogDisplayList) end
+        updateLogDisplayList()
     end
 end
 
 -- Export OnValue
-function OnValue(ctrlName, val)
-    pcall(handleSoilUIValue, ctrlName, val)
+function OnValue(typeVal, name, val)
+    pcall(handleSoilUIValue, typeVal, name, val)
 end
 onValue = OnValue
 
@@ -1527,6 +1704,11 @@ if addEvent and Event and Event.variantlist then
     end)
 end
 
--- Inisialisasi awal UI
-pcall(initSoilBuilderUI)
+-- Inisialisasi awal UI Native GrowLauncher
+pcall(registerNativeSoilUI)
+safeSleep(200)
+pcall(updatePowerStatusList)
+pcall(updateWorldDisplayList)
+pcall(updateStorageDisplayList)
+pcall(updateLogDisplayList)
 addLog("`2[Boren Store] `wAuto Soil & Block Builder siap digunakan!")
