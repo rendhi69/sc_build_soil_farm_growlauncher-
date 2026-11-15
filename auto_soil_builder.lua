@@ -572,66 +572,219 @@ local function getWorldNameSafe()
     return ""
 end
 
-local function getInventorySafe()
-    local inv = nil
-    if getInventory then
-        local ok, res = pcall(getInventory)
-        if ok and type(res) == "table" then inv = res end
+-- ===================== ROBUST INVENTORY & WORLD OBJECT ENGINE =====================
+-- Sesuai dokumentasi resmi GrowLauncher (docs/namespaces/growtopia.md, docs/structs/game-objects.md):
+-- 1. InventoryItem memiliki { id, amount }
+-- 2. getInventory() mengembalikan InventoryItem[] (dapat berupa table maupun Sol2 userdata container)
+-- 3. growtopia.checkInventory(itemid) -> boolean (Cek native C++ apakah player memiliki item)
+-- 4. growtopia.checkInventoryCount(itemid) -> number (Hitung total item via C++ memory)
+-- 5. getObjectList() / getObjects() -> WorldObject[] ({ id, itemid, amount, pos={x, y} })
+
+local function readInvItemFields(it)
+    local t = type(it)
+    if t ~= "table" and t ~= "userdata" then return nil, nil end
+    local id, amt = nil, nil
+    pcall(function() id = tonumber(it.id or it.itemid or it.itemID or it.item_id) end)
+    pcall(function() amt = tonumber(it.amount or it.count or it.cnt) end)
+    return id, amt
+end
+
+local function getRawInventory()
+    if not getInventory then return nil end
+    local ok, inv = pcall(getInventory)
+    if not ok or inv == nil then return nil end
+    local t = type(inv)
+    if t ~= "table" and t ~= "userdata" then return nil end
+    local items = nil
+    pcall(function() items = inv.items end)
+    if items ~= nil and (type(items) == "table" or type(items) == "userdata") then return items end
+    return inv
+end
+
+local function forEachInvItem(fn)
+    local inv = getRawInventory()
+    if not inv then return 0 end
+    local seen = 0
+    pcall(function()
+        for _, it in pairs(inv) do
+            local id, amt = readInvItemFields(it)
+            if id and id > 0 then
+                seen = seen + 1
+                fn(id, amt or 0)
+            end
+        end
+    end)
+    if seen == 0 then
+        local okLen, n = pcall(function() return #inv end)
+        if not okLen or not n or n <= 0 then pcall(function() n = inv:size() end) end
+        local maxI = (n and tonumber(n) and tonumber(n) > 0) and tonumber(n) or 400
+        local misses = 0
+        for i = 0, maxI do
+            local okI, it = pcall(function() return inv[i] end)
+            local id, amt = nil, nil
+            if okI then id, amt = readInvItemFields(it) end
+            if id and id > 0 then
+                misses = 0
+                seen = seen + 1
+                fn(id, amt or 0)
+            else
+                misses = misses + 1
+                if misses >= 50 and i > 5 then break end
+            end
+        end
     end
-    if (not inv or (type(inv) == "table" and #inv == 0 and not inv.items)) and getInventoryItems then
-        local ok, res = pcall(getInventoryItems)
-        if ok and type(res) == "table" then inv = res end
-    end
-    if (not inv or (type(inv) == "table" and #inv == 0 and not inv.items)) and growtopia and growtopia.getInventory then
-        local ok, res = pcall(growtopia.getInventory)
-        if ok and type(res) == "table" then inv = res end
-    end
-    if inv and type(inv) == "table" and inv.items and type(inv.items) == "table" then
-        return inv.items
-    end
-    return inv or {}
+    return seen
 end
 
 local function getInvCount(itemID)
-    -- Disamakan dengan auto_dirt_farm.lua (terbukti works): checkInventoryCount native dulu,
-    -- baru fallback scan getInventory() bila native tidak tersedia / bukan angka / 0.
     local targetID = tonumber(itemID) or 0
     if targetID <= 0 then return 0 end
-    local nativeCnt = nil
+
+    -- A. C++ native GrowLauncher count (paling cepat & akurat jika sinkron)
+    local nativeCnt = 0
     if growtopia and growtopia.checkInventoryCount then
         local ok, cnt = pcall(growtopia.checkInventoryCount, targetID)
-        if ok and type(cnt) == "number" then
-            if cnt > 0 then return cnt end
-            nativeCnt = cnt
+        if ok and tonumber(cnt) and tonumber(cnt) > 0 then
+            return tonumber(cnt)
         end
     end
-    local inv = getInventorySafe()
-    if type(inv) == "table" then
-        local total = 0
-        for _, it in pairs(inv) do
-            if type(it) == "table" or type(it) == "userdata" then
-                local id, amt = nil, nil
-                pcall(function() id = tonumber(it.id or it.itemid or it.itemID) end)
-                pcall(function() amt = tonumber(it.amount or it.count) end)
-                if id == targetID and amt and amt > 0 then total = total + amt end
+
+    -- B. Scan memori tas (mendukung Lua table, nested .items, dan Sol2 userdata vector)
+    local total = 0
+    forEachInvItem(function(id, amt)
+        if id == targetID and amt > 0 then total = total + amt end
+    end)
+    if total > 0 then return total end
+
+    -- C. Fallback otoritatif C++ boolean dari GrowLauncher (docs/namespaces/growtopia.md)
+    -- Jika checkInventoryCount mengembalikan 0 karena lag sync packet, checkInventory() tetap true jika item ada di tas!
+    if growtopia and growtopia.checkInventory then
+        local ok, has = pcall(growtopia.checkInventory, targetID)
+        if ok and has == true then
+            return 1
+        end
+    end
+
+    return 0
+end
+
+local function forEachWorldObject(fn)
+    local getFn = getObjectList or getObjects or getWorldObjects
+    if not getFn then return 0 end
+    local ok, objs = pcall(getFn)
+    if not ok or not objs then return 0 end
+
+    local container = objs
+    pcall(function()
+        if type(objs) == "table" and objs.objects then container = objs.objects end
+    end)
+
+    local seen = 0
+    local function processObj(obj)
+        if not obj then return end
+        local itemid, uid, amt, px, py = nil, nil, nil, nil, nil
+        pcall(function() itemid = tonumber(obj.itemid or obj.itemId or obj.item_id) end)
+        pcall(function() uid = tonumber(obj.id or obj.oid or obj.netid) end)
+        pcall(function() amt = tonumber(obj.amount or obj.count) or 1 end)
+        pcall(function()
+            if obj.pos then
+                px = tonumber(obj.pos.x or obj.pos[1])
+                py = tonumber(obj.pos.y or obj.pos[2])
+            end
+        end)
+        if not px then pcall(function() px = tonumber(obj.x or obj.posX) end) end
+        if not py then pcall(function() py = tonumber(obj.y or obj.posY) end) end
+
+        if itemid and itemid > 0 and uid and px and py then
+            seen = seen + 1
+            fn(itemid, uid, amt, px, py, obj)
+        end
+    end
+
+    pcall(function()
+        for _, obj in pairs(container) do
+            processObj(obj)
+        end
+    end)
+
+    if seen == 0 then
+        local okLen, n = pcall(function() return #container end)
+        if not okLen or not n or n <= 0 then pcall(function() n = container:size() end) end
+        local maxI = (n and tonumber(n) and tonumber(n) > 0) and tonumber(n) or 1000
+        local misses = 0
+        for i = 0, maxI do
+            local okI, obj = pcall(function() return container[i] end)
+            if okI and obj then
+                local prev = seen
+                processObj(obj)
+                if seen > prev then misses = 0 else misses = misses + 1 end
+                if misses >= 50 and i > 10 then break end
+            else
+                misses = misses + 1
+                if misses >= 50 and i > 10 then break end
             end
         end
-        if total > 0 then return total end
     end
-    return nativeCnt or 0
+    return seen
+end
+
+local function findWorldObjectsByItemID(targetID)
+    targetID = tonumber(targetID) or 0
+    if targetID <= 0 then return {} end
+    local list = {}
+    forEachWorldObject(function(itemid, uid, amt, px, py, obj)
+        if itemid == targetID then
+            table.insert(list, {
+                itemid = itemid,
+                id     = uid,
+                amount = amt,
+                x      = px,
+                y      = py,
+                tileX  = math.floor((px + 10) / 32),
+                tileY  = math.floor((py + 10) / 32),
+                raw    = obj,
+            })
+        end
+    end)
+    return list
+end
+
+local function logInventoryDiagnostic(idList, tag)
+    local invType = "nil"
+    if getInventory then
+        local ok, inv = pcall(getInventory)
+        invType = ok and type(inv) or ("err:" .. tostring(inv))
+    end
+    local slots = forEachInvItem(function() end)
+    local parts = {}
+    for _, id in ipairs(idList or {}) do
+        id = tonumber(id) or 0
+        if id > 0 then
+            local nat = "-"
+            if growtopia and growtopia.checkInventoryCount then
+                local ok, c = pcall(growtopia.checkInventoryCount, id)
+                nat = ok and tostring(c) or "err"
+            end
+            local hasBool = false
+            if growtopia and growtopia.checkInventory then
+                local ok, h = pcall(growtopia.checkInventory, id)
+                hasBool = ok and h
+            end
+            local sc = 0
+            forEachInvItem(function(i, a) if i == id then sc = sc + a end end)
+            table.insert(parts, string.format("#%d[nat:%s,has:%s,scan:%d]", id, nat, tostring(hasBool), sc))
+        end
+    end
+    addLog(string.format("`o[BP Diag%s] invType=%s slots=%d | %s",
+        tag and (" " .. tag) or "", invType, slots, table.concat(parts, ", ")))
 end
 
 local function getWorldObjectsSafe()
-    local fn = getObjectList or getObjects or getWorldObjects
-    if not fn then return nil end
-    local ok, objs = pcall(fn)
-    if ok and type(objs) == "table" then
-        if objs.objects and type(objs.objects) == "table" then
-            return objs.objects
-        end
-        return objs
-    end
-    return nil
+    local list = {}
+    forEachWorldObject(function(itemid, uid, amt, px, py, obj)
+        table.insert(list, obj)
+    end)
+    return list
 end
 
 local function collectNearbyFloating(centerX, centerY, customRadius, quickMode, forceCollect)
@@ -1385,10 +1538,36 @@ local function getMissingToolsFromBag(existingSec)
         addNeed(ITEM.JAMMER, 1, "Jammer")
     end
     if CFG.use_id_door and not (existingSec and existingSec.has_id_door) then
-        addNeed(CFG.id_door_itemid or ITEM.WOODEN_DOOR, 1, "Door ID")
+        local did = tonumber(CFG.id_door_itemid) or 0
+        if did <= 0 or getInvCount(did) <= 0 then
+            for _, altID in ipairs({ ITEM.WOODEN_DOOR, 102, 540, 766, 1240 }) do
+                if altID ~= did and getInvCount(altID) > 0 then
+                    addLog(string.format("`2[Auto-Pilih Door ID] `wMenemukan %s (#%d) di tas, dijadikan Door ID!", resolveItemName(altID), altID))
+                    CFG.id_door_itemid = altID
+                    did = altID
+                    persistConfig()
+                    break
+                end
+            end
+        end
+        if did <= 0 then did = ITEM.WOODEN_DOOR end
+        addNeed(did, 1, "Door ID")
     end
     if CFG.use_blocker_door and not (existingSec and existingSec.has_blocker) then
-        addNeed(CFG.blocker_door_itemid or ITEM.WOODEN_DOOR, 1, "Penghalang")
+        local bid = tonumber(CFG.blocker_door_itemid) or 0
+        if bid <= 0 or getInvCount(bid) <= 0 then
+            for _, altID in ipairs({ ITEM.WOODEN_DOOR, 828, 1240, 558, 16, 540, 102 }) do
+                if altID ~= bid and getInvCount(altID) > 0 then
+                    addLog(string.format("`2[Auto-Pilih Blocker] `wMenemukan %s (#%d) di tas, dijadikan Penghalang!", resolveItemName(altID), altID))
+                    CFG.blocker_door_itemid = altID
+                    bid = altID
+                    persistConfig()
+                    break
+                end
+            end
+        end
+        if bid <= 0 then bid = ITEM.WOODEN_DOOR end
+        addNeed(bid, 1, "Penghalang")
     end
     if CFG.auto_use_blast and getInvCount(CFG.blast_item_id) <= 0 then
         addNeed(CFG.blast_item_id, 1, "Blast")
@@ -1407,12 +1586,51 @@ local function getMissingToolsFromBag(existingSec)
     return missingParts, needed, neededOrder, neededRoles
 end
 
+-- [Rekomendasi 1] Auto Collect OFF + Anti Collect ON selama di gudang (persis auto_dirt_farm.lua)
+local function setAutoCollectActive(enabled)
+    if not editToggle then return end
+    if enabled then
+        pcall(editToggle, "Anti Collect", false)
+        pcall(editToggle, "Anti-Collect", false)
+        pcall(editToggle, "Auto Collect", true)
+        pcall(editToggle, "AutoCollect", true)
+    else
+        pcall(editToggle, "Auto Collect", false)
+        pcall(editToggle, "AutoCollect", false)
+        pcall(editToggle, "Anti Collect", true)
+        pcall(editToggle, "Anti-Collect", true)
+    end
+end
+
+-- [Rekomendasi 2] Drop kelebihan item di gudang (confirmDropItem -> fallback packet drop + dialog_return)
+local function dropExcessItem(itemID, keepAmt)
+    local before = getInvCount(itemID)
+    local excess = before - (keepAmt or 0)
+    if excess <= 0 then return 0 end
+    if growtopia and growtopia.confirmDropItem then
+        pcall(growtopia.confirmDropItem, itemID, excess)
+        safeSleep(700)
+    end
+    if getInvCount(itemID) >= before then
+        pcall(sendPacket, 2, "action|drop\n|itemID|" .. tostring(itemID))
+        safeSleep(300)
+        pcall(sendPacket, 2, string.format("action|dialog_return\ndialog_name|drop_item\nitemID|%d|\ncount|%d\n", itemID, excess))
+        safeSleep(600)
+    end
+    local dropped = math.max(0, before - getInvCount(itemID))
+    if dropped > 0 then
+        addLog(string.format("`9[Drop Kelebihan] `o%s x%d dikembalikan ke gudang.", resolveItemName(itemID), dropped))
+    end
+    return dropped
+end
+
 local function ensureToolsFromStorage(existingSec, returnWorld, returnDoor)
     local missingBefore, needed, neededOrder = getMissingToolsFromBag(existingSec)
     if #missingBefore == 0 then return true end
 
     local missingStr = table.concat(missingBefore, ", ")
     addLog("`e[Alat Kurang] `oDibutuhkan: " .. missingStr)
+    logInventoryDiagnostic(neededOrder, "Alat")
 
     if #CFG.storage_tool_list == 0 then
         addLog("`4[Storage Alat Kosong] `oDaftar Gudang Alat belum diisi! Siapkan di tas atau isi Gudang Alat.")
@@ -1424,39 +1642,60 @@ local function ensureToolsFromStorage(existingSec, returnWorld, returnDoor)
 
     -- Loop Multi-World Gudang Alat
     local toolSatisfied = false
+    setAutoCollectActive(false)
     for sIdx, stor in ipairs(CFG.storage_tool_list) do
         setStatus("Ambil Alat", string.format("Gudang Alat %d/%d: %s", sIdx, #CFG.storage_tool_list, stor.name))
         if warpTo(stor.name, stor.door) then
-            safeSleep(1200)
-            local objs = getWorldObjectsSafe()
-            if objs then
-                for _, needID in ipairs(neededOrder) do
-                    local reqAmt = needed[needID]
-                    if getInvCount(needID) < reqAmt then
-                        for _, obj in pairs(objs) do
-                            if obj then
-                                local itemid = tonumber(obj.itemid or obj.itemId or obj.item_id or 0) or 0
-                                local objId = obj.id or obj.oid or obj.netid
-                                local posX = (obj.pos and obj.pos.x) or obj.x or obj.posX
-                                local posY = (obj.pos and obj.pos.y) or obj.y or obj.posY
-                                if itemid == tonumber(needID) and objId and posX and posY then
-                                    local ox = math.floor((posX + 10) / 32)
-                                    local oy = math.floor((posY + 10) / 32)
-                                    moveSafeTo(ox, oy)
-                                    safeSleep(200)
-                                    pcall(sendPacketRaw, false, {
-                                        type  = 11,
-                                        value = objId,
-                                        x     = posX,
-                                        y     = posY,
-                                    })
-                                    safeSleep(300)
-                                    if getInvCount(needID) >= reqAmt then break end
-                                end
+            -- Tunggu hingga world objects tersinkronisasi dari server (maks 2.5 detik)
+            local waited = 0
+            while waited < 2500 do
+                safeSleep(300)
+                waited = waited + 300
+                if forEachWorldObject(function() end) > 0 then break end
+            end
+            safeSleep(200)
+
+            for _, needID in ipairs(neededOrder) do
+                local reqAmt = needed[needID]
+                if getInvCount(needID) < reqAmt then
+                    local foundObjs = findWorldObjectsByItemID(needID)
+                    -- Jika Door ID / Blocker spesifik tidak ada di lantai storage, cari alternatif door di lantai!
+                    if #foundObjs == 0 and (needID == CFG.blocker_door_itemid or needID == CFG.id_door_itemid) then
+                        for _, altID in ipairs({ ITEM.WOODEN_DOOR, 102, 828, 558, 16, 540, 1240 }) do
+                            local altObjs = findWorldObjectsByItemID(altID)
+                            if #altObjs > 0 then
+                                foundObjs = altObjs
+                                if needID == CFG.blocker_door_itemid then CFG.blocker_door_itemid = altID end
+                                if needID == CFG.id_door_itemid then CFG.id_door_itemid = altID end
+                                persistConfig()
+                                break
                             end
                         end
                     end
+
+                    for _, obj in ipairs(foundObjs) do
+                        addLog(string.format("`9[Ambil Alat] `oMengambil %s di (%d, %d) [UID: %d, Butuh %dx]", resolveItemName(obj.itemid), obj.tileX, obj.tileY, obj.id, reqAmt))
+                        moveSafeTo(obj.tileX, obj.tileY)
+                        safeSleep(250)
+                        -- Pastikan Anti Collect OFF saat mengambil objek agar packet 11 tidak diblokir!
+                        if editToggle then
+                            pcall(editToggle, "Anti Collect", false)
+                            pcall(editToggle, "Anti-Collect", false)
+                        end
+                        pcall(sendPacketRaw, false, {
+                            type  = 11,
+                            value = obj.id,
+                            x     = obj.x,
+                            y     = obj.y,
+                        })
+                        safeSleep(350)
+                        if getInvCount(needID) >= reqAmt then break end
+                    end
                 end
+            end
+            -- Kembalikan kelebihan alat ke gudang (sisakan pas sesuai kebutuhan)
+            for _, needID in ipairs(neededOrder) do
+                dropExcessItem(needID, needed[needID])
             end
             local missingCheck = getMissingToolsFromBag(existingSec)
             if #missingCheck == 0 then
@@ -1467,6 +1706,7 @@ local function ensureToolsFromStorage(existingSec, returnWorld, returnDoor)
             addLog("`4[Gagal Warp Gudang Alat] `o" .. tostring(stor.name) .. " tidak bisa dimasuki, lanjut gudang berikutnya.")
         end
     end
+    setAutoCollectActive(CFG.auto_collect)
 
     local missingAfter = getMissingToolsFromBag(existingSec)
     if #missingAfter > 0 then
@@ -1500,47 +1740,45 @@ local function restockSoilBlocksFromStorage(returnWorld, returnDoor)
 
     -- Loop Multi-World Gudang Block & Water
     local gotMaterials = false
+    setAutoCollectActive(false)
     for sIdx, stor in ipairs(CFG.storage_block_list) do
         setStatus("Restock Block/Water", string.format("Gudang %d/%d: %s", sIdx, #CFG.storage_block_list, stor.name))
         if warpTo(stor.name, stor.door) then
-            safeSleep(1200)
-            local objs = getWorldObjectsSafe()
-            if objs then
-                for _, obj in pairs(objs) do
-                    if obj then
-                        local itemid = tonumber(obj.itemid or obj.itemId or obj.item_id or 0) or 0
-                        local objId = obj.id or obj.oid or obj.netid
-                        local posX = (obj.pos and obj.pos.x) or obj.x or obj.posX
-                        local posY = (obj.pos and obj.pos.y) or obj.y or obj.posY
-                        if objId and posX and posY then
-                            if needBlock and itemid == tonumber(CFG.block_id) and getInvCount(CFG.block_id) < 150 then
-                                local ox = math.floor((posX + 10) / 32)
-                                local oy = math.floor((posY + 10) / 32)
-                                moveSafeTo(ox, oy)
-                                safeSleep(180)
-                                pcall(sendPacketRaw, false, {
-                                    type  = 11,
-                                    value = objId,
-                                    x     = posX,
-                                    y     = posY,
-                                })
-                                safeSleep(250)
-                            end
-                            if needWater and itemid == tonumber(CFG.water_item_id) and getInvCount(CFG.water_item_id) < 60 then
-                                local ox = math.floor((posX + 10) / 32)
-                                local oy = math.floor((posY + 10) / 32)
-                                moveSafeTo(ox, oy)
-                                safeSleep(180)
-                                pcall(sendPacketRaw, false, {
-                                    type  = 11,
-                                    value = objId,
-                                    x     = posX,
-                                    y     = posY,
-                                })
-                                safeSleep(250)
-                            end
-                        end
+            local waited = 0
+            while waited < 2500 do
+                safeSleep(300)
+                waited = waited + 300
+                if forEachWorldObject(function() end) > 0 then break end
+            end
+            safeSleep(200)
+
+            if needBlock then
+                local blockObjs = findWorldObjectsByItemID(CFG.block_id)
+                for _, obj in ipairs(blockObjs) do
+                    if getInvCount(CFG.block_id) >= 150 then break end
+                    moveSafeTo(obj.tileX, obj.tileY)
+                    safeSleep(180)
+                    if editToggle then
+                        pcall(editToggle, "Anti Collect", false)
+                        pcall(editToggle, "Anti-Collect", false)
                     end
+                    pcall(sendPacketRaw, false, { type = 11, value = obj.id, x = obj.x, y = obj.y })
+                    safeSleep(250)
+                end
+            end
+
+            if needWater then
+                local waterObjs = findWorldObjectsByItemID(CFG.water_item_id)
+                for _, obj in ipairs(waterObjs) do
+                    if getInvCount(CFG.water_item_id) >= 60 then break end
+                    moveSafeTo(obj.tileX, obj.tileY)
+                    safeSleep(180)
+                    if editToggle then
+                        pcall(editToggle, "Anti Collect", false)
+                        pcall(editToggle, "Anti-Collect", false)
+                    end
+                    pcall(sendPacketRaw, false, { type = 11, value = obj.id, x = obj.x, y = obj.y })
+                    safeSleep(250)
                 end
             end
             if getInvCount(CFG.block_id) >= 50 and ((not CFG.enable_water) or getInvCount(CFG.water_item_id) > 0) then
@@ -1551,6 +1789,7 @@ local function restockSoilBlocksFromStorage(returnWorld, returnDoor)
             addLog("`4[Gagal Warp Gudang Block] `o" .. tostring(stor.name) .. " tidak bisa dimasuki, lanjut gudang berikutnya.")
         end
     end
+    setAutoCollectActive(CFG.auto_collect)
 
     if getInvCount(CFG.block_id) <= 0 then
         addLog("`4[Gudang Habis] `oTidak ada block ID " .. CFG.block_id .. " tersisa di Gudang Block!")
@@ -1969,6 +2208,9 @@ local function botMainLoop()
     STATE.running = true
     STATE.paused  = false
     addLog("`2[Start Bot] `wAuto Soil Builder V2.6.1 resmi dimulai!")
+    -- [Rekomendasi 3] Snapshot BP saat START: langsung kelihatan apakah tas terbaca & ID benar
+    logInventoryDiagnostic({ ITEM.WORLD_LOCK, ITEM.SMALL_LOCK, ITEM.JAMMER, CFG.id_door_itemid,
+        CFG.blocker_door_itemid, CFG.block_id, CFG.enable_water and CFG.water_item_id or 0 }, "Start")
     updatePowerStatusList()
 
     while STATE.running do
@@ -2727,20 +2969,15 @@ end
 
 local function buildBagDisplayRows()
     local rows = {}
-    local items = getInventorySafe()
-    if items and type(items) == "table" then
-        for k, it in pairs(items) do
-            if type(it) == "table" then
-                local id = tonumber(it.id or it.itemid or it.itemID or it.item_id) or 0
-                local cnt = tonumber(it.amount or it.count or it.cnt) or 0
-                if id > 0 and cnt > 0 then
-                    table.insert(rows, { string.format("%s (ID: %d)", resolveItemName(id), id), string.format("Jumlah: %d", cnt) })
-                end
-            elseif tonumber(k) and type(it) == "number" and it > 0 then
-                local id = tonumber(k)
-                table.insert(rows, { string.format("%s (ID: %d)", resolveItemName(id), id), string.format("Jumlah: %d", it) })
-            end
+    local agg, order = {}, {}
+    forEachInvItem(function(id, cnt)
+        if cnt > 0 then
+            if not agg[id] then table.insert(order, id) end
+            agg[id] = (agg[id] or 0) + cnt
         end
+    end)
+    for _, id in ipairs(order) do
+        table.insert(rows, { string.format("%s (ID: %d)", resolveItemName(id), id), string.format("Jumlah: %d", agg[id]) })
     end
     if #rows == 0 then
         -- Fallback: tabel inventory kosong -> cek langsung ID kebutuhan via checkInventoryCount
@@ -3332,3 +3569,8 @@ _G.getMissingToolsFromBag = getMissingToolsFromBag
 _G.getInvCount = getInvCount
 _G.addManualWorldsFromString = addManualWorldsFromString
 _G.refreshNativeDisplayLists = refreshNativeDisplayLists
+
+_G.findWorldObjectsByItemID = findWorldObjectsByItemID
+_G.getInvCount = getInvCount
+
+_G.CFG = CFG
