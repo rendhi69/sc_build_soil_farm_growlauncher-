@@ -1434,32 +1434,47 @@ local function validateAndApplySmallLock(tx, ty, ignoreAir, isPublic, standX, st
 
     STATE.suppress_dialog = true
 
-    for attempt = 1, 3 do
+    for attempt = 1, 2 do
         if not STATE.running then break end
         if not waitIfPaused() then break end
 
-        -- Wrench Small Lock
-        wrenchAndAwaitDialog(tx, ty, "lock_edit", standX, standY)
+        -- 1. Buka dialog Small Lock dengan wrench
+        local gotDlg, dlgText = wrenchAndAwaitDialog(tx, ty, "lock_edit", standX, standY)
+        local recalcBtn = "recalcLock"
+        if gotDlg and dlgText and dlgText ~= "" then
+            local meta = parseDialogFields(dlgText)
+            if meta and meta.buttons then
+                for bName, _ in pairs(meta.buttons) do
+                    local lower = bName:lower()
+                    if lower:find("recalc", 1, true) or lower:find("reapply", 1, true) or lower:find("apply", 1, true) then
+                        recalcBtn = bName
+                        break
+                    end
+                end
+            end
+        end
 
-        -- Step 1: Simpan pengaturan checkbox (public & ignore empty air)
+        -- 2. Langsung kirim RE-APPLY LOCK saat dialog sedang aktif terbuka (buttonClicked = recalcLock)
+        local pktRecalc = string.format(
+            "action|dialog_return\ndialog_name|lock_edit\ntilex|%d|\ntiley|%d|\nbuttonClicked|%s\ncheckbox_public|%s\ncheckbox_ignore|%s\ncheckbox_ignore_air|%s\n",
+            tx, ty, recalcBtn, pubBit, ignBit, ignBit
+        )
+        if sendPacket then pcall(sendPacket, 2, pktRecalc) end
+        safeSleep(400)
+
+        -- 3. Buka ulang dialog dan simpan konfigurasi checkbox
+        wrenchAndAwaitDialog(tx, ty, "lock_edit", standX, standY)
         local pktSave = string.format(
             "action|dialog_return\ndialog_name|lock_edit\ntilex|%d|\ntiley|%d|\ncheckbox_public|%s\ncheckbox_ignore|%s\ncheckbox_ignore_air|%s\n",
             tx, ty, pubBit, ignBit, ignBit
         )
         if sendPacket then pcall(sendPacket, 2, pktSave) end
         safeSleep(350)
-
-        -- Step 2: Trigger RE-APPLY LOCK resmi (buttonClicked|recalcLock)
-        local pktRecalc = string.format(
-            "action|dialog_return\ndialog_name|lock_edit\ntilex|%d|\ntiley|%d|\nbuttonClicked|recalcLock\ncheckbox_public|%s\ncheckbox_ignore|%s\ncheckbox_ignore_air|%s\n",
-            tx, ty, pubBit, ignBit, ignBit
-        )
-        if sendPacket then pcall(sendPacket, 2, pktRecalc) end
-        safeSleep(450)
+        break
     end
 
     STATE.suppress_dialog = false
-    addLog(string.format("`2[SL Re-apply] `wSmall Lock di (%d, %d) diatur: Public=%s, IgnoreAir=%s + Re-apply Lock (recalcLock) OK", tx, ty, tostring(isPublic), tostring(ignoreAir)))
+    addLog(string.format("`2[SL Re-apply] `wSmall Lock di (%d, %d) berhasil di-reapply (IgnoreAir=1, recalcLock OK)", tx, ty))
     return true
 end
 
@@ -1547,13 +1562,81 @@ local function isSecurityAreaTile(x, y, doorX, doorY)
     return false
 end
 
-local function setupWorldLocks(doorX, doorY, existingSec)
-    local sec = existingSec or inspectWorldSecurityState(doorX, doorY)
-    if sec.all_ready then
-        addLog("`2[Lock Enclosure] `wStruktur block kunci sudah ada di world. Memastikan konfigurasi & re-apply lock...")
+-- Helper untuk memeriksa dan menyesuaikan Door ID di (0, 0)
+local function checkAndConfigureDoorID()
+    local targetID = tostring(CFG.door_id or "SOIL"):gsub("%s+", "")
+    local targetLabel = tostring(CFG.door_label or targetID)
+    if targetID == "" then return "" end
+
+    local teleWait = math.max(300, tonumber(CFG.delay_tele_door) or 1500)
+    setStatus("Jeda Tele Door (0,0)", string.format("Jeda %d ms sebelum cek Door ID di (0,0)...", teleWait))
+    safeSleep(teleWait)
+    if CFG.use_modfly and editToggle then pcall(editToggle, "ModFly", true) end
+    safeSleep(150)
+    moveSafeTo(1, 0)
+
+    local ok0, t0 = pcall(getTile, 0, 0)
+    local needPlace = (not ok0) or (not t0) or (t0.fg == 0) or (t0.fg ~= CFG.id_door_itemid and not isDoorOrEntranceItem(t0.fg))
+
+    if needPlace then
+        setStatus("Pasang Door ID (0,0)", "Menaruh Door di (0, 0)")
+        breakTileCompletely(0, 0, true, false, 1)
+        placeAndValidateSecurityTile(0, 0, CFG.id_door_itemid, "Door ID (0,0)", 1, 0)
+        safeSleep(300)
+        validateAndEditDoorTile(0, 0, targetID, targetLabel, 1, 0)
+        return targetID
     end
 
-    setStatus("Setup Lock", string.format("Persiapan slot kunci di sekitar White Door (%d, %d)", doorX, doorY))
+    -- Cek apakah Door ID & Label yang terpasang sudah sesuai
+    local idAlreadyMatching = false
+    if t0 and t0.extra then
+        if t0.extra.target == targetID or (t0.extra.label and t0.extra.label == targetLabel) then
+            idAlreadyMatching = true
+        end
+    end
+
+    if idAlreadyMatching then
+        addLog(string.format("`2[Door ID Validasi] `wDoor ID di (0,0) sudah terpasang & sesuai (ID='%s').", targetID))
+    else
+        addLog(string.format("`e[Door ID Update] `oDoor ID di (0,0) belum sesuai. Mengatur ulang ke '%s'...", targetID))
+        validateAndEditDoorTile(0, 0, targetID, targetLabel, 1, 0)
+    end
+
+    return targetID
+end
+
+local function setupWorldLocks(doorX, doorY, existingSec)
+    local sec = existingSec or inspectWorldSecurityState(doorX, doorY)
+    
+    -- VALIDASI: Jika seluruh komponen kunci sudah terpasang, TIDAK USAH mencoba membuat/break lagi!
+    local locksAlreadyPlaced = (sec.has_wl and sec.has_sl and sec.has_jammer and sec.has_blocker)
+    if locksAlreadyPlaced then
+        addLog("`2[Lock Validasi] `wKunci world sudah terpasang lengkap (WL, Jammer, SL, Penghalang ada). Melewati pembuatan ulang.")
+        
+        -- 1. Tetap pastikan Small Lock di-reapply agar meng-cover Jammer & Penghalang
+        if CFG.use_sl and sec.has_sl then
+            setStatus("Re-apply Small Lock", "Re-apply SL yang sudah ada...")
+            validateAndApplySmallLock(doorX - 1, doorY - 1, CFG.sl_ignore_air, CFG.sl_public, doorX, doorY)
+            safeSleep(200)
+        end
+
+        -- 2. Pastikan WL public
+        if CFG.use_wl and sec.has_wl and CFG.wl_public then
+            validateAndEditWorldLock(doorX - 2, doorY, true, doorX, doorY)
+            safeSleep(200)
+        end
+
+        -- 3. Cek Door ID di (0, 0) apakah sudah sesuai jika menggunakan Door ID
+        local activeDoorID = ""
+        if CFG.use_id_door then
+            activeDoorID = checkAndConfigureDoorID()
+        end
+
+        return activeDoorID
+    end
+
+    -- JIKA BELUM TERPASANG LENGKAP:
+    setStatus("Setup Lock", string.format("Persiapan slot kunci baru di sekitar White Door (%d, %d)", doorX, doorY))
 
     -- Bersihkan slot yang belum terisi sesuai formasi baru:
     -- Penghalang di atas White Door: (doorX, doorY - 1)
@@ -1626,20 +1709,7 @@ local function setupWorldLocks(doorX, doorY, existingSec)
     -- 5. Pasang Door ID di (0, 0)
     local activeDoorID = ""
     if CFG.use_id_door then
-        local teleWait = math.max(300, tonumber(CFG.delay_tele_door) or 1500)
-        setStatus("Jeda Tele Door (0,0)", string.format("Jeda %d ms sebelum ke (0,0)...", teleWait))
-        safeSleep(teleWait)
-        if CFG.use_modfly and editToggle then pcall(editToggle, "ModFly", true) end
-        safeSleep(150)
-
-        if not sec.has_id_door then
-            setStatus("Pasang Door ID (0,0)", "Menaruh Door di (0, 0)")
-            breakTileCompletely(0, 0, true, false, 1)
-            placeAndValidateSecurityTile(0, 0, CFG.id_door_itemid, "Door ID (0,0)", 1, 0)
-            safeSleep(300)
-        end
-        validateAndEditDoorTile(0, 0, CFG.door_id, CFG.door_label, 1, 0)
-        activeDoorID = CFG.door_id
+        activeDoorID = checkAndConfigureDoorID()
     end
 
     return activeDoorID
