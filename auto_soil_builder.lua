@@ -533,38 +533,64 @@ local function getWorldNameSafe()
 end
 
 local function getInventorySafe()
+    local inv = nil
     if getInventory then
-        local ok, inv = pcall(getInventory)
-        if ok and type(inv) == "table" then
-            if inv.items and type(inv.items) == "table" then
-                return inv.items
-            end
-            return inv
-        end
+        local ok, res = pcall(getInventory)
+        if ok and type(res) == "table" then inv = res end
     end
-    return nil
+    if (not inv or (type(inv) == "table" and #inv == 0 and not inv.items)) and getInventoryItems then
+        local ok, res = pcall(getInventoryItems)
+        if ok and type(res) == "table" then inv = res end
+    end
+    if (not inv or (type(inv) == "table" and #inv == 0 and not inv.items)) and growtopia and growtopia.getInventory then
+        local ok, res = pcall(growtopia.getInventory)
+        if ok and type(res) == "table" then inv = res end
+    end
+    if inv and type(inv) == "table" and inv.items and type(inv.items) == "table" then
+        return inv.items
+    end
+    return inv or {}
 end
 
 local function getInvCount(itemID)
-    if not itemID or itemID <= 0 then return 0 end
-    if growtopia and growtopia.checkInventoryCount then
-        local ok, cnt = pcall(growtopia.checkInventoryCount, itemID)
-        if ok and type(cnt) == "number" then
-            return cnt
-        end
-    end
-    local items = getInventorySafe()
-    if items then
-        for _, it in pairs(items) do
-            if it and (it.id == itemID or it.itemid == itemID) then
-                return it.amount or it.count or 0
+    local targetID = tonumber(itemID) or 0
+    if targetID <= 0 then return 0 end
+
+    -- 1. Scan tabel inventory (mendukung flat array, nested .items, dan multi-slot)
+    local inv = getInventorySafe()
+    local total = 0
+    if inv and type(inv) == "table" then
+        for k, it in pairs(inv) do
+            if type(it) == "table" then
+                local id = tonumber(it.id or it.itemid or it.itemID or it.item_id) or 0
+                if id == targetID then
+                    total = total + (tonumber(it.amount or it.count or it.cnt) or 0)
+                end
+            elseif tonumber(k) == targetID and type(it) == "number" then
+                total = total + it
             end
         end
     end
-    if getAmount then
-        local ok, cnt = pcall(getAmount, itemID)
-        if ok and cnt then return tonumber(cnt) or 0 end
+    if total > 0 then
+        return total
     end
+
+    -- 2. Cek C++ native GrowLauncher HANYA JIKA bernilai > 0
+    if growtopia and growtopia.checkInventoryCount then
+        local ok, cnt = pcall(growtopia.checkInventoryCount, targetID)
+        if ok and type(cnt) == "number" and cnt > 0 then
+            return cnt
+        end
+    end
+
+    -- 3. Cek getAmount HANYA JIKA bernilai > 0
+    if getAmount then
+        local ok, cnt = pcall(getAmount, targetID)
+        if ok and tonumber(cnt) and tonumber(cnt) > 0 then
+            return tonumber(cnt)
+        end
+    end
+
     return 0
 end
 
@@ -1512,7 +1538,6 @@ end
 local function inspectMissingSoilBlocks(doorX, doorY)
     local missingList = {}
     local totalExpected = 0
-    local targetBlockID = (CFG.block_id and CFG.block_id > 0) and CFG.block_id or 8772
     for y = CFG.row_start_y, CFG.row_end_y, CFG.row_step do
         for x = CFG.row_start_x, CFG.row_end_x do
             local isDoorTile = (doorX and doorY and x == doorX and y == doorY)
@@ -1520,7 +1545,8 @@ local function inspectMissingSoilBlocks(doorX, doorY)
                 totalExpected = totalExpected + 1
                 local ok, t = pcall(getTile, x, y)
                 if ok and t then
-                    if t.fg ~= targetBlockID and t.fg ~= ITEM.BEDROCK and t.fg ~= ITEM.MAIN_DOOR then
+                    -- Tile dianggap bolong jika masih empty air (fg == 0)
+                    if t.fg == 0 then
                         table.insert(missingList, { x = x, y = y })
                     end
                 else
@@ -1542,7 +1568,7 @@ local function putWaterColumn(restockCb)
         if not waitIfPaused() then break end
 
         local ok, t = pcall(getTile, CFG.water_x, y)
-        if ok and t and t.fg ~= CFG.water_item_id and t.fg ~= ITEM.BEDROCK and t.fg ~= ITEM.MAIN_DOOR then
+        if ok and t and t.fg == 0 then
             if getInvCount(CFG.water_item_id) <= 0 then
                 if restockCb then
                     if not restockCb() then
@@ -1584,11 +1610,8 @@ local function placeSoilRows(worldName, doorID, restockCb)
 
             local targetBlockID = (CFG.block_id and CFG.block_id > 0) and CFG.block_id or 8772
             local ok, t = pcall(getTile, x, y)
-            if ok and t and t.fg ~= targetBlockID and t.fg ~= ITEM.BEDROCK and t.fg ~= ITEM.MAIN_DOOR then
-                if t.fg ~= 0 then
-                    breakTileCompletely(x, y, true, false, (stepX > 0 and -1 or 1))
-                end
-
+            -- HANYA PUT PADA TILE KOSONG (fg == 0), TIDAK ADA BREAK AKTIVITAS
+            if ok and t and t.fg == 0 then
                 if getInvCount(targetBlockID) <= 0 then
                     addLog(string.format("`e[Stok Habis] `oBlock habis pada (%d, %d). Mencoba restock...", x, y))
                     if restockCb then
@@ -1632,24 +1655,23 @@ local function validateAndRepairSoilLayout(worldName, doorID, doorX, doorY, rest
             if not waitIfPaused() then return false end
 
             local ok, t = pcall(getTile, pos.x, pos.y)
-            if ok and t and t.fg ~= 0 and t.fg ~= targetBlockID and t.fg ~= ITEM.BEDROCK and t.fg ~= ITEM.MAIN_DOOR then
-                breakTileCompletely(pos.x, pos.y, true, false, 1)
-            end
-
-            if getInvCount(targetBlockID) <= 0 then
-                if restockCb then
-                    if not restockCb() then return false end
-                else
-                    return false
+            -- HANYA PUT PADA TILE KOSONG (fg == 0), TIDAK ADA BREAK
+            if ok and t and t.fg == 0 then
+                if getInvCount(targetBlockID) <= 0 then
+                    if restockCb then
+                        if not restockCb() then return false end
+                    else
+                        return false
+                    end
                 end
+                placeTileAt(pos.x, pos.y, targetBlockID)
             end
-            placeTileAt(pos.x, pos.y, targetBlockID)
         end
         safeSleep(300)
     end
 
-    local finalMissing = inspectMissingSoilBlocks(doorX, doorY)
-    return (finalMissing == 0)
+    local finalMissing, totalExpected = inspectMissingSoilBlocks(doorX, doorY)
+    return (totalExpected > 0 and finalMissing == 0)
 end
 
 -- ============================================================================
@@ -1712,12 +1734,24 @@ local function runSingleFarmWorld(worldName, worldDoor, manualIdx)
     setStatus("Mempersiapkan", worldName)
     addLog("`2================================================`0")
     addLog(string.format("`2[Mulai World] `wMemproses Farm World: %s", worldName))
+
+    if manualIdx and CFG.farm_world_list[manualIdx] then
+        CFG.farm_world_list[manualIdx].done = false
+        CFG.farm_world_list[manualIdx].status = "PROSES"
+        persistConfig()
+    end
     if updateWorldDisplayList then pcall(updateWorldDisplayList) end
 
     -- 1. Warp ke World Target dengan Verifikasi Ketat (Poin 9)
     if not warpTo(worldName, worldDoor) then
         addLog("`4[Gagal Warp] `oTidak dapat memasuki world " .. worldName)
         setStatus("Gagal Warp", worldName)
+        if manualIdx and CFG.farm_world_list[manualIdx] then
+            CFG.farm_world_list[manualIdx].done = false
+            CFG.farm_world_list[manualIdx].status = "GAGAL WARP"
+            persistConfig()
+            if updateWorldDisplayList then pcall(updateWorldDisplayList) end
+        end
         return false
     end
     safeSleep(1200)
@@ -1726,6 +1760,12 @@ local function runSingleFarmWorld(worldName, worldDoor, manualIdx)
     if not doorX or not doorY then
         setStatus("Error Main Door", "White Door tidak ditemukan di world " .. worldName)
         addLog("`4[Error] `oWhite Door tidak terdeteksi di world " .. worldName)
+        if manualIdx and CFG.farm_world_list[manualIdx] then
+            CFG.farm_world_list[manualIdx].done = false
+            CFG.farm_world_list[manualIdx].status = "NO WHITE DOOR"
+            persistConfig()
+            if updateWorldDisplayList then pcall(updateWorldDisplayList) end
+        end
         return false
     end
 
@@ -1741,6 +1781,12 @@ local function runSingleFarmWorld(worldName, worldDoor, manualIdx)
     else
         -- Ambil alat yang kurang ke Gudang Alat
         if not ensureToolsFromStorage(secState, worldName, worldDoor) then
+            if manualIdx and CFG.farm_world_list[manualIdx] then
+                CFG.farm_world_list[manualIdx].done = false
+                CFG.farm_world_list[manualIdx].status = "ALAT KURANG"
+                persistConfig()
+                if updateWorldDisplayList then pcall(updateWorldDisplayList) end
+            end
             return false
         end
         doorX, doorY = findMainDoor()
@@ -1907,8 +1953,8 @@ local function botMainLoop()
                 setStatus("Antrean Selesai", "Semua antrean selesai diproses.")
                 break
             elseif not hasAntri then
-                addLog("`e[Antrean Selesai] `oSemua antrean telah diproses (beberapa world belum tuntas, cek status di tabel).")
-                setStatus("Selesai (Ada Gagal)", "Semua antrean selesai diproses.")
+                addLog("`4[Berhenti] `oSemua antrean telah diproses tetapi masih ada world belum tuntas/gagal.")
+                setStatus("Berhenti (Ada Gagal)", "Beberapa world belum tuntas, cek status di tabel!")
                 break
             end
         end
@@ -2613,14 +2659,17 @@ end
 local function buildBagDisplayRows()
     local rows = {}
     local items = getInventorySafe()
-    if items then
-        for _, it in pairs(items) do
-            if it and type(it) == "table" then
-                local id = it.id or it.itemid or 0
-                local cnt = it.count or it.amount or 0
+    if items and type(items) == "table" then
+        for k, it in pairs(items) do
+            if type(it) == "table" then
+                local id = tonumber(it.id or it.itemid or it.itemID or it.item_id) or 0
+                local cnt = tonumber(it.amount or it.count or it.cnt) or 0
                 if id > 0 and cnt > 0 then
                     table.insert(rows, { string.format("%s (ID: %d)", resolveItemName(id), id), string.format("Jumlah: %d", cnt) })
                 end
+            elseif tonumber(k) and type(it) == "number" and it > 0 then
+                local id = tonumber(k)
+                table.insert(rows, { string.format("%s (ID: %d)", resolveItemName(id), id), string.format("Jumlah: %d", it) })
             end
         end
     end
