@@ -1,5 +1,5 @@
 -- ============================================================================
--- AUTO SOIL & BLOCK FARM BUILDER - BOREN STORE (EDISI SENIOR DEVELOPER V2.6.0)
+-- AUTO SOIL & BLOCK FARM BUILDER - BOREN STORE ( V2.6.0)
 -- ============================================================================
 -- Framework : GrowLauncher Lua (Android & PC Windows)
 -- Arsitektur : Mengadopsi 100% Core Engine & Movement auto_dirt_farm.lua
@@ -24,7 +24,7 @@ local ITEM = {
     HUGE_LOCK      = 206,
     BUILDER_LOCK   = 4994,
     JAMMER         = 226,
-    AIR_VENT       = 2810, -- Standar Lucifer: ID 2810 (Air Vent)
+    AIR_VENT       = 2810, --  ID 2810 (Air Vent)
     DOOR           = 12,
     MAIN_DOOR      = 6,    -- White Door
     WHITE_DOOR     = 6,
@@ -33,20 +33,20 @@ local ITEM = {
     ROCK           = 10,
     LAVA           = 4,
     SOIL_BLOCK     = 8772, -- Fertile Soil Block
-    WATER          = 822,  -- Standar Lucifer: ID 822 (Water Bucket)
+    WATER          = 822,  --  ID 822 (Water Bucket)
     TermonuclearBlat = 1402,
-    BLAST_CAVE     = 3562, -- Standar Lucifer: ID 3562 (Cave Blast)
+    BLAST_CAVE     = 3562, --  ID 3562 (Cave Blast)
     BLAST_BEACH    = 830,  -- Beach Blast
     BLAST_HARVEST  = 1060, -- Harvest Blast
     PUNCH          = 18,
     WRENCH         = 32,
-    WOOD_PLATFORM  = 102,  -- Standar Lucifer: ID 102 (Wooden Platform)
-    DUNGEON_DOOR   = 30,   -- Standar Lucifer: ID 30 (Dungeon Door)
-    PORTAL         = 544,  -- Standar Lucifer: ID 544 (Orange Portal)
-    PORTAL_BLUE    = 546,  -- Standar Lucifer: ID 546 (Blue Portal)
-    HOUSE_ENTRANCE = 224,  -- Standar Lucifer: ID 224 (House Entrance)
-    SCREEN_DOOR    = 858,  -- Standar Lucifer: ID 858 (Screen Door)
-    PORTCULLIS     = 60,   -- Standar Lucifer: ID 60 (Portcullis)
+    WOOD_PLATFORM  = 102,  --  ID 102 (Wooden Platform)
+    DUNGEON_DOOR   = 30,   --  ID 30 (Dungeon Door)
+    PORTAL         = 544,  --  ID 544 (Orange Portal)
+    PORTAL_BLUE    = 546,  --  ID 546 (Blue Portal)
+    HOUSE_ENTRANCE = 224,  --  ID 224 (House Entrance)
+    SCREEN_DOOR    = 858,  --  ID 858 (Screen Door)
+    PORTCULLIS     = 60,   --  ID 60 (Portcullis)
 }
 
 local OTHER_LOCKS = {
@@ -240,7 +240,7 @@ local CFG = {
 
     -- 6. Fitur Water Column (Toggle true / false)
     enable_water        = (getPref("enable_water", false) == true),
-    water_item_id       = tonumber(getPref("water_item_id", 822)) or 822, -- Standar Lucifer: 822 (Water Bucket)
+    water_item_id       = tonumber(getPref("water_item_id", 822)) or 822, --  822 (Water Bucket)
     water_x             = tonumber(getPref("water_x", 0)) or 0,
 
     -- 4 & 5. Lock & Door Enclosure (Kustom Door & Penghalang)
@@ -261,7 +261,7 @@ local CFG = {
 
     -- Auto Blast Settings
     auto_use_blast      = (getPref("auto_use_blast", false) == true),
-    blast_item_id       = tonumber(getPref("blast_item_id", 3562)) or 3562, -- Standar Lucifer: 3562 (Cave Blast)
+    blast_item_id       = tonumber(getPref("blast_item_id", 3562)) or 3562, --  3562 (Cave Blast)
 
     -- Random World Settings
     random_target_count = tonumber(getPref("random_target_count", 5)) or 5,
@@ -585,11 +585,13 @@ end
 local function safeSleep(ms)
     ms = tonumber(ms) or 100
     if ms <= 0 then return end
-    if sleep then
+    if CSleep then
+        pcall(CSleep, ms)
+    elseif sleep then
         pcall(sleep, ms)
     else
         local t0 = os.clock()
-        while (os.clock() - t0) * 1000 < ms do end
+        while STATE.running and (os.clock() - t0) * 1000 < ms do end
     end
 end
 
@@ -1854,7 +1856,7 @@ local function ensureToolsFromStorage(existingSec, returnWorld, returnDoor)
         if warpTo(stor.name, stor.door) then
             -- Tunggu hingga world objects tersinkronisasi dari server (maks 2.5 detik)
             local waited = 0
-            while waited < 2500 do
+            while waited < 2500 and STATE.running do
                 safeSleep(300)
                 waited = waited + 300
                 if forEachWorldObject(function() end) > 0 then break end
@@ -1951,7 +1953,7 @@ local function restockSoilBlocksFromStorage(returnWorld, returnDoor)
         setStatus("Restock Block/Water", string.format("Gudang %d/%d: %s", sIdx, #CFG.storage_block_list, stor.name))
         if warpTo(stor.name, stor.door) then
             local waited = 0
-            while waited < 2500 do
+            while waited < 2500 and STATE.running do
                 safeSleep(300)
                 waited = waited + 300
                 if forEachWorldObject(function() end) > 0 then break end
@@ -2594,8 +2596,7 @@ local function botMainLoop()
     if refreshNativeDisplayLists then pcall(refreshNativeDisplayLists) end
     STATE.running = true
     STATE.paused  = false
-    addLog("`2[Start Bot] `wAuto Soil Builder V2.6.1 resmi dimulai!")
-    -- [Rekomendasi 3] Snapshot BP saat START: langsung kelihatan apakah tas terbaca & ID benar
+    addLog("`2[Start Bot] `wAuto Soil Builder V2.6.2 resmi dimulai!")
     logInventoryDiagnostic({ ITEM.WORLD_LOCK, ITEM.SMALL_LOCK, ITEM.JAMMER, CFG.id_door_itemid,
         CFG.blocker_door_itemid, CFG.block_id, CFG.enable_water and CFG.water_item_id or 0 }, "Start")
     updatePowerStatusList()
@@ -2612,27 +2613,34 @@ local function botMainLoop()
             runSingleFarmWorld(rndName, "", nil)
         else
             -- Mode Manual World Put
+            -- Jika antrean kosong tapi user sudah isi input manual, otomatis masukkan (seperti Auto Dirt Farm)
+            if #CFG.farm_world_list == 0 and STATE.buf_world_name and STATE.buf_world_name ~= "" then
+                addManualWorldsFromString(STATE.buf_world_name, STATE.buf_world_door or "", false)
+            end
+
             local foundUndone = false
-            local hasAntri = false
+
             for idx, wItem in ipairs(CFG.farm_world_list) do
                 if not STATE.running then break end
                 if not waitIfPaused() then break end
 
                 if not wItem.done and wItem.status ~= "DONE" then
                     foundUndone = true
-                    if wItem.status == "ANTRI" or wItem.status == "PROSES" then
-                        hasAntri = true
-                        wItem.status = "PROSES"
-                        if updateWorldDisplayList then pcall(updateWorldDisplayList) end
+                    wItem.status = "PROSES"
+                    STATE.active_world = wItem.name
+                    STATE.active_door = wItem.door or ""
+                    if updateWorldDisplayList then pcall(updateWorldDisplayList) end
 
-                        local ok = runSingleFarmWorld(wItem.name, wItem.door, idx)
-                        if not ok then
-                            if wItem.status == "PROSES" then
-                                wItem.status = "GAGAL"
-                            end
-                            if updateWorldDisplayList then pcall(updateWorldDisplayList) end
-                            safeSleep(2000)
+                    local ok = runSingleFarmWorld(wItem.name, wItem.door, idx)
+                    if not ok then
+                        if not STATE.running then
+                            -- Dihentikan manual oleh user: kembalikan status ke ANTRI agar langsung bisa di-run lagi
+                            wItem.status = "ANTRI"
+                        elseif wItem.status == "PROSES" then
+                            wItem.status = "GAGAL"
                         end
+                        if updateWorldDisplayList then pcall(updateWorldDisplayList) end
+                        safeSleep(1000)
                     end
                 end
             end
@@ -2645,9 +2653,7 @@ local function botMainLoop()
                 addLog("`2[Antrean Selesai] `wSemua world dalam antrean World Put sudah berstatus DONE 100%!")
                 setStatus("Antrean Selesai", "Semua antrean selesai diproses 100%.")
                 break
-            elseif not hasAntri then
-                addLog("`4[Berhenti] `oAda world belum selesai atau terhenti karena kendala alat/bahan.")
-                setStatus("Berhenti (Ada Kendala)", "Cek status world di tabel UI (Alat/Block kurang)!")
+            elseif not STATE.running then
                 break
             end
         end
@@ -2657,19 +2663,47 @@ local function botMainLoop()
 
     STATE.running = false
     STATE.paused  = false
+    STATE.active_world = ""
+    STATE.active_door  = ""
+    -- Bila masih ada world yang berstatus PROSES saat berhenti, kembalikan ke ANTRI
+    for _, w in ipairs(CFG.farm_world_list) do
+        if w.status == "PROSES" then
+            w.status = "ANTRI"
+        end
+    end
     setStatus("Berhenti", "Bot selesai beroperasi.")
     if editToggle then pcall(editToggle, "sb_run_power", false) end
+    if updateWorldDisplayList then pcall(updateWorldDisplayList) end
     updatePowerStatusList()
 end
 
 local function startSoilBot()
     if STATE.running then return end
+    STATE.running = true
+    STATE.paused  = false
+    if editToggle then pcall(editToggle, "sb_run_power", true) end
+    if updatePowerStatusList then pcall(updatePowerStatusList) end
+
+    -- Reset semua world antrean yang belum selesai (ANTRI, PROSES, GAGAL, dsb) menjadi "ANTRI"
+    for _, w in ipairs(CFG.farm_world_list) do
+        if not w.done and w.status ~= "DONE" then
+            w.status = "ANTRI"
+        end
+    end
+    if updateWorldDisplayList then pcall(updateWorldDisplayList) end
+
     if syncInputsFromGL then pcall(syncInputsFromGL) end
     -- WAJIB runCoroutine (sama seperti auto_dirt_farm.lua). runThread = native thread terpisah,
     -- baca memori game (inventory / object list) dari situ tidak reliable -> item "tidak terdeteksi".
     if runCoroutine then
         local ok, err = pcall(runCoroutine, botMainLoop)
-        if not ok then addLog("`4[Start Err] `o" .. tostring(err)) end
+        if not ok then
+            STATE.running = false
+            if editToggle then pcall(editToggle, "sb_run_power", false) end
+            addLog("`4[Start Err] `o" .. tostring(err))
+            setStatus("Error Start", tostring(err))
+            if updatePowerStatusList then pcall(updatePowerStatusList) end
+        end
     elseif runThread then
         runThread(botMainLoop)
     else
@@ -2680,6 +2714,14 @@ end
 local function stopSoilBot()
     STATE.running = false
     STATE.paused  = false
+    -- Bila ada world yang berstatus "PROSES", kembalikan ke "ANTRI" agar siap di-run lagi
+    for _, w in ipairs(CFG.farm_world_list) do
+        if w.status == "PROSES" then
+            w.status = "ANTRI"
+        end
+    end
+    if updateWorldDisplayList then pcall(updateWorldDisplayList) end
+    if editToggle then pcall(editToggle, "sb_run_power", false) end
     setStatus("Dihentikan", "Bot dihentikan manual oleh user.")
     updatePowerStatusList()
 end
@@ -3159,8 +3201,9 @@ local function registerNativeSoilUI()
     -- Tab 1: Start & World (Antrean World Put)
     local uiWorld = createNativeUI("1. Start & World", "PlayArrow")
     uiWorld:addLabelApp("Boren Store - Soil Builder", "Storefront")
-    uiWorld:addToggleButton("▶ START / ■ STOP SOIL BOT", false, "sb_run_power")
+    uiWorld:addButton("▶ START SOIL BOT", "sb_btn_start")
     uiWorld:addButton("■ STOP SOIL BOT", "sb_btn_stop")
+    uiWorld:addToggleButton("▶ START / ■ STOP TOGGLE", false, "sb_run_power")
     uiWorld:addToggle("Pause Bot", false, "sb_pause_toggle", false)
     uiWorld:addDisplayList("Status Bot", "Default", "sb_power_status_list")
     uiWorld:addDivider()
@@ -3526,11 +3569,27 @@ local function handleUIValue(vtype, name, value)
 
     -- Tab 1: Start & World
     if name == "sb_run_power" then
-        if toBoolVal(value) then startSoilBot() else stopSoilBot() end
+        local wantRun = toBoolVal(value)
+        if wantRun and not STATE.running then
+            startSoilBot()
+        elseif not wantRun and STATE.running then
+            stopSoilBot()
+        elseif not STATE.running then
+            -- Fallback jika widget toggle GL desync dari stop button: jika bot sedang mati, klik toggle = START!
+            startSoilBot()
+        else
+            stopSoilBot()
+        end
+        return
+    elseif name == "sb_btn_start" then
+        if not STATE.running then
+            startSoilBot()
+        end
+        return
     elseif name == "sb_btn_stop" then
         stopSoilBot()
-        if editToggle then pcall(editToggle, "sb_run_power", false) end
         if sendNotification then pcall(sendNotification, "Soil Builder dihentikan!") end
+        return
     elseif name == "sb_pause_toggle" then
         STATE.paused = toBoolVal(value)
         setStatus(STATE.paused and "Paused" or (STATE.running and "Running" or "Siap"), STATE.paused and "Bot dijeda." or "Bot dilanjutkan.")
@@ -3915,7 +3974,7 @@ registerNativeSoilUI()
 refreshNativeDisplayLists()
 
 local ALL_UI_ALIASES = {
-    "sb_run_power", "sb_btn_stop", "sb_pause_toggle",
+    "sb_run_power", "sb_btn_start", "sb_btn_stop", "sb_pause_toggle",
     "sb_manual_world_input", "sb_manual_door_input",
     "sb_btn_add_world", "sb_btn_add_cur_world", "sb_btn_view_worlds", "sb_btn_clear_worlds",
     "sb_world_file", "sb_btn_save_worlds", "sb_btn_load_worlds",
