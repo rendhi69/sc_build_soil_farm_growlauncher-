@@ -242,6 +242,32 @@ local function persistConfig()
     savePrefData(CFG)
 end
 
+-- Bersihkan entri rusak "0" / kosong hasil bug form lama (world:0) dari config tersimpan
+do
+    local function sanitizeWorldList(list)
+        local out = {}
+        if type(list) ~= "table" then return out end
+        for _, it in ipairs(list) do
+            if type(it) == "table" then
+                local n = tostring(it.name or ""):upper():gsub("%s+", "")
+                local d = tostring(it.door or ""):gsub("%s+", "")
+                if d == "0" then d = "" end
+                if n ~= "" and n ~= "0" and n ~= "EXIT" then
+                    it.name = n
+                    it.door = d
+                    table.insert(out, it)
+                end
+            end
+        end
+        return out
+    end
+    CFG.farm_world_list    = sanitizeWorldList(CFG.farm_world_list)
+    CFG.storage_tool_list  = sanitizeWorldList(CFG.storage_tool_list)
+    CFG.storage_block_list = sanitizeWorldList(CFG.storage_block_list)
+    if CFG.manual_world_text == "0" then CFG.manual_world_text = "" end
+    if CFG.manual_door_text == "0" then CFG.manual_door_text = "" end
+end
+
 -- 4. RUNTIME BOT STATE
 local STATE = {
     running              = false,
@@ -422,7 +448,8 @@ local function parseWorldEntryToken(rawToken, defaultDoor)
     end
     wName = wName:upper():gsub("%s+", "")
     dId = (dId or ""):gsub("%s+", "")
-    if wName == "" or wName == "EXIT" then return nil end
+    if wName == "" or wName == "EXIT" or wName == "0" then return nil end
+    if dId == "0" then dId = "" end
 
     return {
         name = wName,
@@ -566,66 +593,32 @@ local function getInventorySafe()
 end
 
 local function getInvCount(itemID)
+    -- Disamakan dengan auto_dirt_farm.lua (terbukti works): checkInventoryCount native dulu,
+    -- baru fallback scan getInventory() bila native tidak tersedia / bukan angka / 0.
     local targetID = tonumber(itemID) or 0
     if targetID <= 0 then return 0 end
-
-    -- 1. Cek C++ native GrowLauncher terlebih dahulu HANYA JIKA > 0
-    if growtopia and growtopia.checkInventoryCount then
-        local ok, cnt = pcall(growtopia.checkInventoryCount, targetID)
-        if ok and type(cnt) == "number" and cnt > 0 then
-            return cnt
-        end
-    end
-
-    -- 2. Cek getAmount native HANYA JIKA > 0
-    if getAmount then
-        local ok, cnt = pcall(getAmount, targetID)
-        if ok and tonumber(cnt) and tonumber(cnt) > 0 then
-            return tonumber(cnt)
-        end
-    end
-
-    -- 3. Scan tabel inventory (mendukung flat array, nested .items, userdata, hash map, dan multi-slot)
-    local inv = getInventorySafe()
-    local total = 0
-    if inv and (type(inv) == "table" or type(inv) == "userdata") then
-        for k, it in pairs(inv) do
-            local id = nil
-            local amount = nil
-            local t = type(it)
-            if t == "table" or t == "userdata" then
-                pcall(function() id = tonumber(it.id) end)
-                if not id then pcall(function() id = tonumber(it.itemid) end) end
-                if not id then pcall(function() id = tonumber(it.itemID) end) end
-                if not id then pcall(function() id = tonumber(it.item_id) end) end
-                if not id then pcall(function() id = tonumber(it[1]) end) end
-
-                pcall(function() amount = tonumber(it.amount) end)
-                if not amount then pcall(function() amount = tonumber(it.count) end) end
-                if not amount then pcall(function() amount = tonumber(it.cnt) end) end
-                if not amount then pcall(function() amount = tonumber(it[2]) end) end
-            elseif tonumber(k) == targetID and type(it) == "number" then
-                id = targetID
-                amount = it
-            end
-            if id and id == targetID and amount and amount > 0 then
-                total = total + amount
-            end
-        end
-    end
-    if total > 0 then
-        return total
-    end
-
-    -- 4. Fallback C++ native GrowLauncher jika mengembalikan 0
+    local nativeCnt = nil
     if growtopia and growtopia.checkInventoryCount then
         local ok, cnt = pcall(growtopia.checkInventoryCount, targetID)
         if ok and type(cnt) == "number" then
-            return cnt
+            if cnt > 0 then return cnt end
+            nativeCnt = cnt
         end
     end
-
-    return 0
+    local inv = getInventorySafe()
+    if type(inv) == "table" then
+        local total = 0
+        for _, it in pairs(inv) do
+            if type(it) == "table" or type(it) == "userdata" then
+                local id, amt = nil, nil
+                pcall(function() id = tonumber(it.id or it.itemid or it.itemID) end)
+                pcall(function() amt = tonumber(it.amount or it.count) end)
+                if id == targetID and amt and amt > 0 then total = total + amt end
+            end
+        end
+        if total > 0 then return total end
+    end
+    return nativeCnt or 0
 end
 
 local function getWorldObjectsSafe()
@@ -967,8 +960,10 @@ end
 -- ============================================================================
 local function warpTo(worldName, doorID)
     if not worldName or worldName == "" then return false end
-    worldName = worldName:upper():gsub("%s+", "")
-    doorID = (doorID or ""):gsub("%s+", "")
+    worldName = tostring(worldName):upper():gsub("%s+", "")
+    doorID = tostring(doorID or ""):gsub("%s+", "")
+    if worldName == "" or worldName == "0" then return false end
+    if doorID == "0" then doorID = "" end
 
     local targetStr = (doorID ~= "") and (worldName .. "|" .. doorID) or worldName
     setStatus("Warping", "Menuju world " .. targetStr)
@@ -1468,6 +1463,8 @@ local function ensureToolsFromStorage(existingSec, returnWorld, returnDoor)
                 toolSatisfied = true
                 break
             end
+        else
+            addLog("`4[Gagal Warp Gudang Alat] `o" .. tostring(stor.name) .. " tidak bisa dimasuki, lanjut gudang berikutnya.")
         end
     end
 
@@ -1550,6 +1547,8 @@ local function restockSoilBlocksFromStorage(returnWorld, returnDoor)
                 gotMaterials = true
                 break
             end
+        else
+            addLog("`4[Gagal Warp Gudang Block] `o" .. tostring(stor.name) .. " tidak bisa dimasuki, lanjut gudang berikutnya.")
         end
     end
 
@@ -2037,7 +2036,12 @@ end
 local function startSoilBot()
     if STATE.running then return end
     if syncInputsFromGL then pcall(syncInputsFromGL) end
-    if runThread then
+    -- WAJIB runCoroutine (sama seperti auto_dirt_farm.lua). runThread = native thread terpisah,
+    -- baca memori game (inventory / object list) dari situ tidak reliable -> item "tidak terdeteksi".
+    if runCoroutine then
+        local ok, err = pcall(runCoroutine, botMainLoop)
+        if not ok then addLog("`4[Start Err] `o" .. tostring(err)) end
+    elseif runThread then
         runThread(botMainLoop)
     else
         botMainLoop()
@@ -2739,6 +2743,20 @@ local function buildBagDisplayRows()
         end
     end
     if #rows == 0 then
+        -- Fallback: tabel inventory kosong -> cek langsung ID kebutuhan via checkInventoryCount
+        local seen = {}
+        local ids = { ITEM.WORLD_LOCK, ITEM.SMALL_LOCK, ITEM.JAMMER, CFG.id_door_itemid,
+            CFG.blocker_door_itemid, CFG.block_id, CFG.water_item_id, CFG.blast_item_id }
+        for _, id in ipairs(ids) do
+            id = tonumber(id) or 0
+            if id > 0 and not seen[id] then
+                seen[id] = true
+                local cnt = getInvCount(id)
+                table.insert(rows, { string.format("%s (ID: %d)", resolveItemName(id), id), string.format("Jumlah: %d", cnt) })
+            end
+        end
+    end
+    if #rows == 0 then
         table.insert(rows, { "Tas kosong atau belum terbaca", "Klik 'Refresh Tas' saat berada di world" })
     end
     return rows
@@ -2777,17 +2795,18 @@ end
 -- 20. INPUT STRING & STATE SYNC HELPER
 -- ============================================================================
 local function readGLString(alias, defaultVal)
+    -- Disamakan dengan auto_dirt_farm.lua: HANYA terima string non-kosong & bukan "0".
+    -- getValue(1, alias) pada input string mengembalikan angka 0 -> dulu jadi "0" (bug world:0).
     defaultVal = defaultVal or ""
     if getValue then
-        local ok5, v5 = pcall(getValue, 5, alias)
-        if ok5 and v5 ~= nil and tostring(v5) ~= "" then return tostring(v5) end
-        local ok1, v1 = pcall(getValue, 1, alias)
-        if ok1 and v1 ~= nil and tostring(v1) ~= "" then return tostring(v1) end
-        local ok2, v2 = pcall(getValue, 2, alias)
-        if ok2 and v2 ~= nil and tostring(v2) ~= "" then return tostring(v2) end
-        local ok0, v0 = pcall(getValue, alias)
-        if ok0 and v0 ~= nil and tostring(v0) ~= "" then return tostring(v0) end
+        for _, vtype in ipairs({ 2, 5 }) do
+            local ok, val = pcall(getValue, vtype, alias)
+            if ok and type(val) == "string" and val ~= "" and val ~= "0" then
+                return val
+            end
+        end
     end
+    if defaultVal == "0" then return "" end
     return defaultVal
 end
 
@@ -2854,6 +2873,14 @@ local function toBoolVal(v)
     return (v == true or v == 1 or v == "true" or v == "1")
 end
 
+-- Nilai input string dari event: tolak nil / angka / "0" (GL kadang kirim 0 untuk input string)
+local function cleanStrVal(v)
+    if type(v) ~= "string" then return "" end
+    v = v:gsub("^%s+", ""):gsub("%s+$", "")
+    if v == "0" then return "" end
+    return v
+end
+
 local function handleUIValue(vtype, name, value)
     if type(vtype) == "string" and (name == nil or type(name) ~= "string" or (type(name) == "string" and vtype:sub(1, 3) == "sb_")) then
         value = name
@@ -2883,11 +2910,15 @@ local function handleUIValue(vtype, name, value)
         STATE.paused = toBoolVal(value)
         setStatus(STATE.paused and "Paused" or (STATE.running and "Running" or "Siap"), STATE.paused and "Bot dijeda." or "Bot dilanjutkan.")
     elseif name == "sb_manual_world_input" then
-        CFG.manual_world_text = tostring(value or ""):upper()
-        STATE.buf_world_name = CFG.manual_world_text
+        local v = cleanStrVal(value)
+        if v ~= "" then
+            CFG.manual_world_text = v:upper()
+            STATE.buf_world_name = CFG.manual_world_text
+        end
     elseif name == "sb_manual_door_input" then
-        CFG.manual_door_text = tostring(value or "")
-        STATE.buf_world_door = CFG.manual_door_text
+        local v = cleanStrVal(value)
+        CFG.manual_door_text = v
+        STATE.buf_world_door = v
     elseif name == "sb_btn_add_world" then
         local wIn = readGLString("sb_manual_world_input", "")
         if wIn ~= "" then
@@ -3043,14 +3074,16 @@ local function handleUIValue(vtype, name, value)
 
     -- Tab 3: Storage (Gudang Alat, Block & Water)
     elseif name == "sb_input_add_tool" then
-        STATE.buf_tool_name = tostring(value or ""):upper()
+        local v = cleanStrVal(value)
+        if v ~= "" then STATE.buf_tool_name = v:upper() end
     elseif name == "sb_input_add_tool_door" then
-        STATE.buf_tool_door = tostring(value or "")
+        local v = cleanStrVal(value)
+        if v ~= "" then STATE.buf_tool_door = v end
     elseif name == "sb_btn_add_tool_direct" then
         local tName = readGLString("sb_input_add_tool", STATE.buf_tool_name):upper()
         local tDoor = readGLString("sb_input_add_tool_door", STATE.buf_tool_door)
         local parsed = parseWorldBatchFromString(tName)
-        if #parsed == 0 and tName ~= "" and tName ~= "EXIT" then
+        if #parsed == 0 and tName ~= "" and tName ~= "EXIT" and tName ~= "0" then
             table.insert(parsed, { name = tName, door = tDoor })
         end
         local added = 0
@@ -3103,14 +3136,16 @@ local function handleUIValue(vtype, name, value)
         if sendNotification then pcall(sendNotification, "Gudang Alat dikosongkan!") end
 
     elseif name == "sb_input_add_block" then
-        STATE.buf_block_name = tostring(value or ""):upper()
+        local v = cleanStrVal(value)
+        if v ~= "" then STATE.buf_block_name = v:upper() end
     elseif name == "sb_input_add_block_door" then
-        STATE.buf_block_door = tostring(value or "")
+        local v = cleanStrVal(value)
+        if v ~= "" then STATE.buf_block_door = v end
     elseif name == "sb_btn_add_block_direct" then
         local bName = readGLString("sb_input_add_block", STATE.buf_block_name):upper()
         local bDoor = readGLString("sb_input_add_block_door", STATE.buf_block_door)
         local parsed = parseWorldBatchFromString(bName)
-        if #parsed == 0 and bName ~= "" and bName ~= "EXIT" then
+        if #parsed == 0 and bName ~= "" and bName ~= "EXIT" and bName ~= "0" then
             table.insert(parsed, { name = bName, door = bDoor })
         end
         local added = 0
