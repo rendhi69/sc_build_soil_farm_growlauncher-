@@ -3,16 +3,33 @@
 Script otomatis pembuatan layout soil / block farm untuk GrowLauncher (Growtopia Bot).
 Mendukung susunan horizontal rows & water elevator, struktur lock enclosure baru, 3 kategori world management terpisah, mode put 3 block zigzag cepat, dan integrasi database item resmi Growtopia / Lucifer.
 
-## Fitur Utama V2.4.0
-1. **Mode Put 3 Block (Zigzag Cepat Ala Lucifer):**
+## Fitur Utama V2.5.0
+1. **Posisi Baris Block Presisi Standar Soil Farm (27 Baris di Y Ganjil 1..53):**
+   - **Baris Paling Bawah (Y=53):** Terletak persis di atas Bedrock (Y=54), **sejajar dengan World Lock dan Signal Jammer**.
+   - **Baris Paling Atas (Y=1):** Memiliki **ruang tanam (space for planting) di Y=0 yang sejajar persis dengan Door ID (0,0)**.
+   - Mengoreksi susunan lama (yang sebelumnya mirip platform Dirt Farm di baris genap 2..54) menjadi baris ganjil 1..53 (step 2, total 27 baris).
+2. **Perbaikan Tuntas Dialog & Re-apply Lock (SL, WL, Door ID):**
+   - **Small Lock Re-apply:** Selalu mengirim paket dialog resmi `action|dialog_return
+dialog_name|lock_edit
+tilex|%d|
+tiley|%d|
+buttonClicked|recalcLock
+checkbox_public|0
+checkbox_ignore|1
+checkbox_ignore_air|1
+`.
+   - **World Lock Public:** Selalu mengirim paket `checkbox_public|1` dengan `tilex` dan `tiley` eksplisit.
+   - **Door ID (0,0):** Selalu mengirim konfigurasi Door ID (`door_id`), Label (`door_name`), dan `checkbox_locked|1` (open to public).
+   - Menghilangkan bug di mana `setupWorldLocks` melewati konfigurasi jika struktur kunci sudah terpasang.
+3. **Mode Put 3 Block (Zigzag Cepat Ala Lucifer):**
    - Menempatkan 3 block sekaligus dari satu posisi berdiri di koridor udara `(standX, y - 1)`: `{ standX - 1, standX, standX + 1 }`.
    - Melangkah 3 petak ke depan secara dinamis (`step 3`), mempercepat penempatan block hingga ~3x lipat dibanding mode 1-by-1 biasa.
    - Dilengkapi toggle di UI tab Pengaturan: `Mode Put 3 Block (Zigzag Cepat)` (default: ON / `3zigzag`, dengan fallback `1by1`).
-2. **Layout Grid Presisi Sesuai Standar Soil Farm:**
+4. **Layout Grid Presisi Sesuai Standar Soil Farm:**
    - **Kolom X=0:** Kolom air (Water Elevator) vertikal dari Y=1 s/d Y=54.
-   - **Kolom X=1 s/d X=98:** Baris horizontal Soil Block (27 baris di Y genap: 2, 4, 6, ..., 54). Baris langsung menempel rapi di sebelah kolom air (`row_start_x = 1`).
+   - **Kolom X=1 s/d X=98:** Baris horizontal Soil Block (27 baris di Y ganjil: 1, 3, 5, ..., 53). Baris langsung menempel rapi di sebelah kolom air (`row_start_x = 1`).
    - **Kolom X=99:** Selalu KOSONG (Air Corridor) dari atas ke bawah sebagai akses jalur lewat/terjun bot & player (`row_end_x = 98`).
-3. **Sinkronisasi Database Item Resmi (Standar Lucifer / Growtopia items.dat):**
+5. **Sinkronisasi Database Item Resmi (Standar Lucifer / Growtopia items.dat):**
    - **Air Vent:** ID 2810 (bukan 828).
    - **Water Bucket:** ID 822 (bukan 818).
    - **Door / Wooden Door:** ID 12 (bukan 102).
@@ -24,7 +41,7 @@ Mendukung susunan horizontal rows & water elevator, struktur lock enclosure baru
    - **Orange Portal:** ID 544 (bukan 382 / 766).
    - **Cave Blast:** ID 3562 (bukan 2810).
    - Dilengkapi database JSON `items_database.json` di repositori ini.
-4. **Formasi & Urutan Lock Enclosure Baru Sesuai Standar Farm:**
+6. **Formasi & Urutan Lock Enclosure Baru Sesuai Standar Farm:**
    - **Urutan Pemasangan:**
      1. **Penghalang (Air Vent 2810 / Door 12)** di atas White Door: `(doorX, doorY - 1)` (di sebelah kanan Small Lock).
      2. **Signal Jammer (ID 226)** di kiri White Door: `(doorX - 1, doorY)` + punch 1x (aktif).

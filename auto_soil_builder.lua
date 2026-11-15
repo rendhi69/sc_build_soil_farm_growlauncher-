@@ -268,10 +268,10 @@ local CFG = {
     random_length       = tonumber(getPref("random_length", 6)) or 6,
     random_use_numbers  = (getPref("random_use_numbers", true) == true),
 
-    -- Layout Grid Baris
+    -- Layout Grid Baris (Standar Soil Farm: 27 baris di Y ganjil 1..53)
     row_step            = tonumber(getPref("row_step", 2)) or 2,
-    row_start_y         = tonumber(getPref("row_start_y", 2)) or 2,
-    row_end_y           = tonumber(getPref("row_end_y", 54)) or 54,
+    row_start_y         = tonumber(getPref("row_start_y", 1)) or 1, -- Space tanam baris teratas (Y=0) sejajar Door ID (0,0)
+    row_end_y           = tonumber(getPref("row_end_y", 53)) or 53, -- Baris terbawah (Y=53) di atas Bedrock (Y=54) & sejajar WL/Jammer
     row_start_x         = tonumber(getPref("row_start_x", 1)) or 1,
     row_end_x           = tonumber(getPref("row_end_x", 98)) or 98, -- Kolom 99 selalu KOSONG untuk jalur lewat
     put_mode            = getPref("put_mode", "3zigzag"), -- "3zigzag" | "1by1"
@@ -323,6 +323,8 @@ do
     if CFG.manual_door_text == "0" then CFG.manual_door_text = "" end
     if CFG.row_end_x >= 99 then CFG.row_end_x = 98 end
     if CFG.row_start_x == 2 then CFG.row_start_x = 1 end
+    if CFG.row_start_y == 2 then CFG.row_start_y = 1 end
+    if CFG.row_end_y == 54 or CFG.row_end_y >= 54 then CFG.row_end_y = 53 end
 end
 
 -- 4. RUNTIME BOT STATE
@@ -1255,19 +1257,31 @@ local DIALOG_WATCH = {
     hook_registered = false,
 }
 
-local function onVariantDialogHook(varlist)
-    if not varlist then return end
-    local v0 = varlist[0] or varlist[1]
-    if v0 == "OnDialogRequest" then
-        local dText = tostring(varlist[1] or varlist[2] or "")
-        if DIALOG_WATCH.waiting and DIALOG_WATCH.expected_name then
-            if dText:find(DIALOG_WATCH.expected_name, 1, true) then
-                DIALOG_WATCH.captured_text = dText
-                DIALOG_WATCH.captured_time = os.clock()
-                DIALOG_WATCH.waiting = false
+local function onVariantDialogHook(var, pkt)
+    if not var then return end
+    local ok, shouldBlock = pcall(function()
+        local v0 = var.v0 or var.v1 or var[0] or var[1]
+        local v1 = var.v1 or var.v2 or var[1] or var[2]
+        if v0 == "OnDialogRequest" or v1 == "OnDialogRequest" then
+            local raw = tostring((v0 == "OnDialogRequest" and v1) or var.v2 or var[2] or "")
+            local dName = raw:match("end_dialog|([^|\r\n]+)") or ""
+            STATE.last_dialog_text = raw
+            STATE.last_dialog_name = dName
+            STATE.last_dialog_seq = (STATE.last_dialog_seq or 0) + 1
+            if DIALOG_WATCH.waiting and DIALOG_WATCH.expected_name then
+                if dName == DIALOG_WATCH.expected_name or raw:find(DIALOG_WATCH.expected_name, 1, true) then
+                    DIALOG_WATCH.captured_text = raw
+                    DIALOG_WATCH.captured_time = os.clock()
+                    DIALOG_WATCH.waiting = false
+                end
+            end
+            if STATE.suppress_dialog then
+                return true
             end
         end
-    end
+        return false
+    end)
+    if ok and shouldBlock then return true end
 end
 
 local function safeSendRawDialog(dText)
@@ -1350,71 +1364,103 @@ local function placeAndValidateSecurityTile(tx, ty, itemID, tileLabel, standX, s
 end
 
 local function validateAndEditDoorTile(tx, ty, doorID, doorLabel, standX, standY)
-    if not doorID or doorID == "" then return true end
-    doorLabel = doorLabel or doorID
+    local targetID = tostring(doorID or CFG.door_id or "SOIL"):gsub("%s+", "")
+    local targetLabel = tostring(doorLabel or CFG.door_label or targetID)
     standX = standX or (tx + 1)
     standY = standY or ty
+    moveSafeTo(standX, standY)
+    safeSleep(200)
+
+    STATE.suppress_dialog = true
 
     for attempt = 1, 3 do
         if not STATE.running then break end
-        local gotDlg, dlgText = wrenchAndAwaitDialog(tx, ty, "door_edit", standX, standY)
-        local fMap = {}
-        if gotDlg and dlgText then fMap = parseDialogFields(dlgText) end
-        fMap["door_name"] = tostring(doorLabel)
-        fMap["door_target"] = tostring(doorID)
-        fMap["door_id"] = tostring(doorID)
+        if not waitIfPaused() then break end
 
-        local pkt = buildDialogReturn("door_edit", "", fMap)
-        if sendPacket then pcall(sendPacket, 2, pkt) end
-        safeSleep(350)
-        return true
+        -- Wrench door untuk memicu OnDialogRequest
+        wrenchAndAwaitDialog(tx, ty, "door_edit", standX, standY)
+
+        -- Kirim packet eksplisit dengan tilex, tiley, door_name, door_id, dan checkbox_locked = 1
+        local pktStr = string.format(
+            "action|dialog_return\ndialog_name|door_edit\ntilex|%d|\ntiley|%d|\ndoor_name|%s\ndoor_target|\ndoor_id|%s\ncheckbox_locked|1\n",
+            tx, ty, targetLabel, targetID
+        )
+        if sendPacket then pcall(sendPacket, 2, pktStr) end
+        safeSleep(450)
     end
-    return false
+
+    STATE.suppress_dialog = false
+    addLog(string.format("`2[Door ID Setup] `wDoor di (%d, %d) diatur: ID='%s' Label='%s'", tx, ty, targetID, targetLabel))
+    return true
 end
 
 local function validateAndEditWorldLock(tx, ty, isPublic, standX, standY)
+    local pubBit = isPublic and "1" or "0"
     standX = standX or tx
     standY = standY or ty
+    moveSafeTo(standX, standY)
+    safeSleep(200)
+
+    STATE.suppress_dialog = true
 
     for attempt = 1, 3 do
         if not STATE.running then break end
-        local gotDlg, dlgText = wrenchAndAwaitDialog(tx, ty, "lock_edit", standX, standY)
-        local fMap = {}
-        if gotDlg and dlgText then fMap = parseDialogFields(dlgText) end
-        fMap["checkbox_public"] = isPublic and "1" or "0"
-        fMap["checkbox_disable_music"] = "0"
+        if not waitIfPaused() then break end
 
-        local pkt = buildDialogReturn("lock_edit", "", fMap)
-        if sendPacket then pcall(sendPacket, 2, pkt) end
-        safeSleep(350)
-        return true
+        -- Wrench WL
+        wrenchAndAwaitDialog(tx, ty, "lock_edit", standX, standY)
+
+        -- Kirim packet resmi World Lock setting dengan tilex, tiley, dan checkbox_public
+        local pktStr = string.format(
+            "action|dialog_return\ndialog_name|lock_edit\ntilex|%d|\ntiley|%d|\ncheckbox_public|%s\ncheckbox_disable_music|0\ntempo|100\ncheckbox_disable_music_render|0\ncheckbox_set_as_home_world|0\nminimum_entry_level|1\n",
+            tx, ty, pubBit
+        )
+        if sendPacket then pcall(sendPacket, 2, pktStr) end
+        safeSleep(450)
     end
-    return false
+
+    STATE.suppress_dialog = false
+    addLog(string.format("`2[WL Setup] `wWorld Lock di (%d, %d) diatur: Public=%s", tx, ty, tostring(isPublic)))
+    return true
 end
 
 local function validateAndApplySmallLock(tx, ty, ignoreAir, isPublic, standX, standY)
+    local pubBit = isPublic and "1" or "0"
+    local ignBit = ignoreAir and "1" or "0"
     standX = standX or tx
     standY = standY or ty
+    moveSafeTo(standX, standY)
+    safeSleep(200)
+
+    STATE.suppress_dialog = true
 
     for attempt = 1, 3 do
         if not STATE.running then break end
-        local gotDlg, dlgText = wrenchAndAwaitDialog(tx, ty, "lock_edit", standX, standY)
-        local fMap = {}
-        if gotDlg and dlgText then fMap = parseDialogFields(dlgText) end
+        if not waitIfPaused() then break end
 
-        fMap["checkbox_public"] = isPublic and "1" or "0"
-        fMap["checkbox_ignore_air"] = ignoreAir and "1" or "0"
+        -- Wrench Small Lock
+        wrenchAndAwaitDialog(tx, ty, "lock_edit", standX, standY)
 
-        local pktApply = buildDialogReturn("lock_edit", "apply_lock", fMap)
-        if sendPacket then pcall(sendPacket, 2, pktApply) end
-        safeSleep(400)
-
-        local pktSave = buildDialogReturn("lock_edit", "", fMap)
+        -- Step 1: Simpan pengaturan checkbox (public & ignore empty air)
+        local pktSave = string.format(
+            "action|dialog_return\ndialog_name|lock_edit\ntilex|%d|\ntiley|%d|\ncheckbox_public|%s\ncheckbox_ignore|%s\ncheckbox_ignore_air|%s\n",
+            tx, ty, pubBit, ignBit, ignBit
+        )
         if sendPacket then pcall(sendPacket, 2, pktSave) end
         safeSleep(350)
-        return true
+
+        -- Step 2: Trigger RE-APPLY LOCK resmi (buttonClicked|recalcLock)
+        local pktRecalc = string.format(
+            "action|dialog_return\ndialog_name|lock_edit\ntilex|%d|\ntiley|%d|\nbuttonClicked|recalcLock\ncheckbox_public|%s\ncheckbox_ignore|%s\ncheckbox_ignore_air|%s\n",
+            tx, ty, pubBit, ignBit, ignBit
+        )
+        if sendPacket then pcall(sendPacket, 2, pktRecalc) end
+        safeSleep(450)
     end
-    return false
+
+    STATE.suppress_dialog = false
+    addLog(string.format("`2[SL Re-apply] `wSmall Lock di (%d, %d) diatur: Public=%s, IgnoreAir=%s + Re-apply Lock (recalcLock) OK", tx, ty, tostring(isPublic), tostring(ignoreAir)))
+    return true
 end
 
 -- ============================================================================
@@ -1504,8 +1550,7 @@ end
 local function setupWorldLocks(doorX, doorY, existingSec)
     local sec = existingSec or inspectWorldSecurityState(doorX, doorY)
     if sec.all_ready then
-        addLog("`2[Lock Enclosure] `wSemua Lock, Jammer & Door sudah lengkap!")
-        return (CFG.use_id_door and CFG.door_id ~= "") and CFG.door_id or ""
+        addLog("`2[Lock Enclosure] `wStruktur block kunci sudah ada di world. Memastikan konfigurasi & re-apply lock...")
     end
 
     setStatus("Setup Lock", string.format("Persiapan slot kunci di sekitar White Door (%d, %d)", doorX, doorY))
@@ -1546,14 +1591,13 @@ local function setupWorldLocks(doorX, doorY, existingSec)
     if CFG.use_jammer and doorX - 1 >= 0 then
         if not sec.has_jammer then
             setStatus("Pasang Jammer", string.format("Menaruh Jammer di (%d, %d)", doorX - 1, doorY))
-            local jamPlaced = placeAndValidateSecurityTile(doorX - 1, doorY, ITEM.JAMMER, "Signal Jammer", doorX, doorY)
-            if jamPlaced then
-                safeSleep(300)
-                sendRawAction(doorX - 1, doorY, ITEM.PUNCH)
-                safeSleep(350)
-                addLog(string.format("`2[Jammer OK] `wSignal Jammer aktif di (%d, %d)", doorX - 1, doorY))
-            end
+            placeAndValidateSecurityTile(doorX - 1, doorY, ITEM.JAMMER, "Signal Jammer", doorX, doorY)
+            safeSleep(300)
         end
+        -- Pastikan jammer aktif (punch 1x)
+        sendRawAction(doorX - 1, doorY, ITEM.PUNCH)
+        safeSleep(350)
+        addLog(string.format("`2[Jammer OK] `wSignal Jammer aktif di (%d, %d)", doorX - 1, doorY))
     end
 
     -- 3. Pasang Small Lock di (doorX - 1, doorY - 1) [di kiri Penghalang, di atas Jammer] + Set Private & Re-apply Lock (cover Jammer & Penghalang)
@@ -3130,7 +3174,7 @@ local function registerNativeSoilUI()
     uiSetting:addToggle("Mode Put 3 Block (Zigzag Cepat)", CFG.put_mode == "3zigzag", "sb_toggle_mode_3zigzag", true)
     uiSetting:addSlider("Jarak Baris (Step)", 1, 4, CFG.row_step, 1, false, "sb_in_row_step")
     uiSetting:addSlider("Baris Awal (Y)", 1, 10, CFG.row_start_y, 1, false, "sb_in_start_y")
-    uiSetting:addSlider("Baris Akhir (Y)", 40, 56, CFG.row_end_y, 1, false, "sb_in_end_y")
+    uiSetting:addSlider("Baris Akhir (Y)", 40, 55, CFG.row_end_y, 1, false, "sb_in_end_y")
     uiSetting:addSlider("Kolom Awal (X)", 0, 10, CFG.row_start_x, 1, false, "sb_in_start_x")
     uiSetting:addSlider("Kolom Akhir (X)", 80, 98, CFG.row_end_x, 1, false, "sb_in_end_x")
     uiSetting:addDivider()
@@ -3786,6 +3830,8 @@ end
 onValue = OnValue
 onSendPacket = onSendPacketDialogHook
 OnSendPacket = onSendPacketDialogHook
+onVariant = onVariantDialogHook
+OnVariant = onVariantDialogHook
 
 if addHook then
     pcall(addHook, onSendPacketDialogHook, "onsendpacket")
