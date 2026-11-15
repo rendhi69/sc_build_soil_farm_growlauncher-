@@ -363,19 +363,32 @@ end
 
 local function resolvePickedItemID(value)
     if not value or value == "" then return nil end
-    if type(value) == "table" then
-        value = value.id or value.itemID or value.itemid or value.value or value.name
+    local vType = type(value)
+    if vType == "table" or vType == "userdata" then
+        local ok, v = pcall(function()
+            return value.id or value.itemID or value.itemid or value.item_id or value.value or value.item or value.name
+        end)
+        if ok and v ~= nil then value = v end
     end
     local num = tonumber(value)
     if num and num > 0 then
         return math.floor(num)
     end
     if type(value) == "string" and value ~= "" then
-        local sNum = tonumber(cleanItemName(value))
+        local clean = cleanItemName(value)
+        local sNum = tonumber(clean)
         if sNum and sNum > 0 then
             return math.floor(sNum)
         end
-        local lookedUp = lookupItemIDByName(value)
+        local leadNum = clean:match("^(%d+)")
+        if leadNum and tonumber(leadNum) and tonumber(leadNum) > 0 then
+            return math.floor(tonumber(leadNum))
+        end
+        local embedNum = clean:match("%((%d+)%)") or clean:match("#(%d+)") or clean:match("(%d+)")
+        if embedNum and tonumber(embedNum) and tonumber(embedNum) > 0 then
+            return math.floor(tonumber(embedNum))
+        end
+        local lookedUp = lookupItemIDByName(clean)
         if lookedUp and lookedUp > 0 then
             return lookedUp
         end
@@ -556,26 +569,7 @@ local function getInvCount(itemID)
     local targetID = tonumber(itemID) or 0
     if targetID <= 0 then return 0 end
 
-    -- 1. Scan tabel inventory (mendukung flat array, nested .items, dan multi-slot)
-    local inv = getInventorySafe()
-    local total = 0
-    if inv and type(inv) == "table" then
-        for k, it in pairs(inv) do
-            if type(it) == "table" then
-                local id = tonumber(it.id or it.itemid or it.itemID or it.item_id) or 0
-                if id == targetID then
-                    total = total + (tonumber(it.amount or it.count or it.cnt) or 0)
-                end
-            elseif tonumber(k) == targetID and type(it) == "number" then
-                total = total + it
-            end
-        end
-    end
-    if total > 0 then
-        return total
-    end
-
-    -- 2. Cek C++ native GrowLauncher HANYA JIKA bernilai > 0
+    -- 1. Cek C++ native GrowLauncher terlebih dahulu HANYA JIKA > 0
     if growtopia and growtopia.checkInventoryCount then
         local ok, cnt = pcall(growtopia.checkInventoryCount, targetID)
         if ok and type(cnt) == "number" and cnt > 0 then
@@ -583,11 +577,51 @@ local function getInvCount(itemID)
         end
     end
 
-    -- 3. Cek getAmount HANYA JIKA bernilai > 0
+    -- 2. Cek getAmount native HANYA JIKA > 0
     if getAmount then
         local ok, cnt = pcall(getAmount, targetID)
         if ok and tonumber(cnt) and tonumber(cnt) > 0 then
             return tonumber(cnt)
+        end
+    end
+
+    -- 3. Scan tabel inventory (mendukung flat array, nested .items, userdata, hash map, dan multi-slot)
+    local inv = getInventorySafe()
+    local total = 0
+    if inv and (type(inv) == "table" or type(inv) == "userdata") then
+        for k, it in pairs(inv) do
+            local id = nil
+            local amount = nil
+            local t = type(it)
+            if t == "table" or t == "userdata" then
+                pcall(function() id = tonumber(it.id) end)
+                if not id then pcall(function() id = tonumber(it.itemid) end) end
+                if not id then pcall(function() id = tonumber(it.itemID) end) end
+                if not id then pcall(function() id = tonumber(it.item_id) end) end
+                if not id then pcall(function() id = tonumber(it[1]) end) end
+
+                pcall(function() amount = tonumber(it.amount) end)
+                if not amount then pcall(function() amount = tonumber(it.count) end) end
+                if not amount then pcall(function() amount = tonumber(it.cnt) end) end
+                if not amount then pcall(function() amount = tonumber(it[2]) end) end
+            elseif tonumber(k) == targetID and type(it) == "number" then
+                id = targetID
+                amount = it
+            end
+            if id and id == targetID and amount and amount > 0 then
+                total = total + amount
+            end
+        end
+    end
+    if total > 0 then
+        return total
+    end
+
+    -- 4. Fallback C++ native GrowLauncher jika mengembalikan 0
+    if growtopia and growtopia.checkInventoryCount then
+        local ok, cnt = pcall(growtopia.checkInventoryCount, targetID)
+        if ok and type(cnt) == "number" then
+            return cnt
         end
     end
 
@@ -1330,12 +1364,13 @@ end
 -- ============================================================================
 -- 11. MULTI-STORAGE RESTOCK ENGINE (Poin 2 & 3)
 -- ============================================================================
-local function ensureToolsFromStorage(existingSec, returnWorld, returnDoor)
+local function getMissingToolsFromBag(existingSec)
     local needed = {}
     local neededOrder = {}
     local neededRoles = {}
     local function addNeed(id, count, roleLabel)
-        if not id or id <= 0 then return end
+        id = tonumber(id) or 0
+        if id <= 0 then return end
         if not needed[id] then
             table.insert(neededOrder, id)
             neededRoles[id] = roleLabel
@@ -1364,21 +1399,21 @@ local function ensureToolsFromStorage(existingSec, returnWorld, returnDoor)
         addNeed(CFG.blast_item_id, 1, "Blast")
     end
 
-    local function collectMissingText()
-        local missingParts = {}
-        for _, needID in ipairs(neededOrder) do
-            local reqAmt = needed[needID]
-            local curAmt = getInvCount(needID)
-            if curAmt < reqAmt then
-                local diff = reqAmt - curAmt
-                local role = neededRoles[needID] or ""
-                table.insert(missingParts, string.format("%s (%s) x%d", role, resolveItemName(needID), diff))
-            end
+    local missingParts = {}
+    for _, needID in ipairs(neededOrder) do
+        local reqAmt = needed[needID]
+        local curAmt = getInvCount(needID)
+        if curAmt < reqAmt then
+            local diff = reqAmt - curAmt
+            local role = neededRoles[needID] or ""
+            table.insert(missingParts, string.format("%s (%s #%d) x%d", role, resolveItemName(needID), needID, diff))
         end
-        return missingParts
     end
+    return missingParts, needed, neededOrder, neededRoles
+end
 
-    local missingBefore = collectMissingText()
+local function ensureToolsFromStorage(existingSec, returnWorld, returnDoor)
+    local missingBefore, needed, neededOrder = getMissingToolsFromBag(existingSec)
     if #missingBefore == 0 then return true end
 
     local missingStr = table.concat(missingBefore, ", ")
@@ -1405,11 +1440,11 @@ local function ensureToolsFromStorage(existingSec, returnWorld, returnDoor)
                     if getInvCount(needID) < reqAmt then
                         for _, obj in pairs(objs) do
                             if obj then
-                                local itemid = obj.itemid or obj.itemId or obj.item_id or 0
+                                local itemid = tonumber(obj.itemid or obj.itemId or obj.item_id or 0) or 0
                                 local objId = obj.id or obj.oid or obj.netid
                                 local posX = (obj.pos and obj.pos.x) or obj.x or obj.posX
                                 local posY = (obj.pos and obj.pos.y) or obj.y or obj.posY
-                                if itemid == needID and objId and posX and posY then
+                                if itemid == tonumber(needID) and objId and posX and posY then
                                     local ox = math.floor((posX + 10) / 32)
                                     local oy = math.floor((posY + 10) / 32)
                                     moveSafeTo(ox, oy)
@@ -1428,14 +1463,15 @@ local function ensureToolsFromStorage(existingSec, returnWorld, returnDoor)
                     end
                 end
             end
-            if #collectMissingText() == 0 then
+            local missingCheck = getMissingToolsFromBag(existingSec)
+            if #missingCheck == 0 then
                 toolSatisfied = true
                 break
             end
         end
     end
 
-    local missingAfter = collectMissingText()
+    local missingAfter = getMissingToolsFromBag(existingSec)
     if #missingAfter > 0 then
         local strAfter = table.concat(missingAfter, ", ")
         addLog("`4[Alat Kurang di Gudang] `oMasih kurang: " .. strAfter)
@@ -1475,12 +1511,12 @@ local function restockSoilBlocksFromStorage(returnWorld, returnDoor)
             if objs then
                 for _, obj in pairs(objs) do
                     if obj then
-                        local itemid = obj.itemid or obj.itemId or obj.item_id or 0
+                        local itemid = tonumber(obj.itemid or obj.itemId or obj.item_id or 0) or 0
                         local objId = obj.id or obj.oid or obj.netid
                         local posX = (obj.pos and obj.pos.x) or obj.x or obj.posX
                         local posY = (obj.pos and obj.pos.y) or obj.y or obj.posY
                         if objId and posX and posY then
-                            if needBlock and itemid == CFG.block_id and getInvCount(CFG.block_id) < 150 then
+                            if needBlock and itemid == tonumber(CFG.block_id) and getInvCount(CFG.block_id) < 150 then
                                 local ox = math.floor((posX + 10) / 32)
                                 local oy = math.floor((posY + 10) / 32)
                                 moveSafeTo(ox, oy)
@@ -1493,7 +1529,7 @@ local function restockSoilBlocksFromStorage(returnWorld, returnDoor)
                                 })
                                 safeSleep(250)
                             end
-                            if needWater and itemid == CFG.water_item_id and getInvCount(CFG.water_item_id) < 60 then
+                            if needWater and itemid == tonumber(CFG.water_item_id) and getInvCount(CFG.water_item_id) < 60 then
                                 local ox = math.floor((posX + 10) / 32)
                                 local oy = math.floor((posY + 10) / 32)
                                 moveSafeTo(ox, oy)
@@ -1779,20 +1815,31 @@ local function runSingleFarmWorld(worldName, worldDoor, manualIdx)
             activeDoorID = CFG.door_id
         end
     else
-        -- Ambil alat yang kurang ke Gudang Alat
-        if not ensureToolsFromStorage(secState, worldName, worldDoor) then
-            if manualIdx and CFG.farm_world_list[manualIdx] then
-                CFG.farm_world_list[manualIdx].done = false
-                CFG.farm_world_list[manualIdx].status = "ALAT KURANG"
-                persistConfig()
-                if updateWorldDisplayList then pcall(updateWorldDisplayList) end
+        -- Cek dulu inventori tas: jika semua kebutuhan alat sudah ada di tas, LANGSUNG pasang lock!
+        local missingTools = getMissingToolsFromBag(secState)
+        if #missingTools == 0 then
+            addLog("`2[Alat di Tas Lengkap] `wSemua kebutuhan lock ada di tas, langsung memasang formasi lock tanpa ke Gudang Alat!")
+            doorX, doorY = findMainDoor()
+            if not doorX or not doorY then return false end
+            activeDoorID = setupWorldLocks(doorX, doorY, secState)
+            if activeDoorID == "" then activeDoorID = worldDoor or "" end
+        else
+            -- Alat belum lengkap di tas, baru warp ke Gudang Alat
+            addLog("`e[Alat di Tas Belum Lengkap] `oMenuju Gudang Alat untuk mengambil: " .. table.concat(missingTools, ", "))
+            if not ensureToolsFromStorage(secState, worldName, worldDoor) then
+                if manualIdx and CFG.farm_world_list[manualIdx] then
+                    CFG.farm_world_list[manualIdx].done = false
+                    CFG.farm_world_list[manualIdx].status = "ALAT KURANG"
+                    persistConfig()
+                    if updateWorldDisplayList then pcall(updateWorldDisplayList) end
+                end
+                return false
             end
-            return false
+            doorX, doorY = findMainDoor()
+            if not doorX or not doorY then return false end
+            activeDoorID = setupWorldLocks(doorX, doorY, secState)
+            if activeDoorID == "" then activeDoorID = worldDoor or "" end
         end
-        doorX, doorY = findMainDoor()
-        if not doorX or not doorY then return false end
-        activeDoorID = setupWorldLocks(doorX, doorY, secState)
-        if activeDoorID == "" then activeDoorID = worldDoor or "" end
     end
 
     if manualIdx and CFG.farm_world_list[manualIdx] and activeDoorID ~= "" and CFG.farm_world_list[manualIdx].door ~= activeDoorID then
@@ -1824,7 +1871,8 @@ local function runSingleFarmWorld(worldName, worldDoor, manualIdx)
         if not restockFn() then
             addLog("`4[Gagal Stok Awal] `oTidak ada block di tas dan gagal restock.")
             if manualIdx and CFG.farm_world_list[manualIdx] then
-                CFG.farm_world_list[manualIdx].status = "STOK HABIS"
+                CFG.farm_world_list[manualIdx].done = false
+                CFG.farm_world_list[manualIdx].status = "BLOCK KURANG"
                 persistConfig()
                 if updateWorldDisplayList then pcall(updateWorldDisplayList) end
             end
@@ -1837,6 +1885,7 @@ local function runSingleFarmWorld(worldName, worldDoor, manualIdx)
     if not okRows then
         addLog("`4[Konstruksi Gagal] `oGagal menuntaskan baris block di " .. worldName)
         if manualIdx and CFG.farm_world_list[manualIdx] then
+            CFG.farm_world_list[manualIdx].done = false
             CFG.farm_world_list[manualIdx].status = "GAGAL PUT"
             persistConfig()
             if updateWorldDisplayList then pcall(updateWorldDisplayList) end
@@ -1851,6 +1900,18 @@ local function runSingleFarmWorld(worldName, worldDoor, manualIdx)
         if manualIdx and CFG.farm_world_list[manualIdx] then
             CFG.farm_world_list[manualIdx].done = false
             CFG.farm_world_list[manualIdx].status = string.format("KURANG (%d)", missingLeft)
+            persistConfig()
+            if updateWorldDisplayList then pcall(updateWorldDisplayList) end
+        end
+        return false
+    end
+
+    local missingFinal, totalExp = inspectMissingSoilBlocks(doorX, doorY)
+    if missingFinal > 0 then
+        addLog(string.format("`4[Validasi Akhir] `oWorld %s masih menyisakan %d/%d tile kosong! TIDAK DITANDAI DONE.", worldName, missingFinal, totalExp))
+        if manualIdx and CFG.farm_world_list[manualIdx] then
+            CFG.farm_world_list[manualIdx].done = false
+            CFG.farm_world_list[manualIdx].status = string.format("BOLONG (%d)", missingFinal)
             persistConfig()
             if updateWorldDisplayList then pcall(updateWorldDisplayList) end
         end
@@ -1948,13 +2009,17 @@ local function botMainLoop()
                 end
             end
 
-            if not foundUndone then
-                addLog("`2[Antrean Selesai] `wSemua world dalam antrean World Put sudah berstatus DONE!")
-                setStatus("Antrean Selesai", "Semua antrean selesai diproses.")
+            if #CFG.farm_world_list == 0 then
+                addLog("`e[Antrean Kosong] `oDaftar antrean World Put belum diisi. Silakan tambahkan world terlebih dahulu.")
+                setStatus("Antrean Kosong", "Isi antrean World Put lalu tekan START.")
+                break
+            elseif not foundUndone then
+                addLog("`2[Antrean Selesai] `wSemua world dalam antrean World Put sudah berstatus DONE 100%!")
+                setStatus("Antrean Selesai", "Semua antrean selesai diproses 100%.")
                 break
             elseif not hasAntri then
-                addLog("`4[Berhenti] `oSemua antrean telah diproses tetapi masih ada world belum tuntas/gagal.")
-                setStatus("Berhenti (Ada Gagal)", "Beberapa world belum tuntas, cek status di tabel!")
+                addLog("`4[Berhenti] `oAda world belum selesai atau terhenti karena kendala alat/bahan.")
+                setStatus("Berhenti (Ada Kendala)", "Cek status world di tabel UI (Alat/Block kurang)!")
                 break
             end
         end
@@ -2716,12 +2781,32 @@ local function readGLString(alias, defaultVal)
     if getValue then
         local ok5, v5 = pcall(getValue, 5, alias)
         if ok5 and v5 ~= nil and tostring(v5) ~= "" then return tostring(v5) end
+        local ok1, v1 = pcall(getValue, 1, alias)
+        if ok1 and v1 ~= nil and tostring(v1) ~= "" then return tostring(v1) end
         local ok2, v2 = pcall(getValue, 2, alias)
         if ok2 and v2 ~= nil and tostring(v2) ~= "" then return tostring(v2) end
         local ok0, v0 = pcall(getValue, alias)
         if ok0 and v0 ~= nil and tostring(v0) ~= "" then return tostring(v0) end
     end
     return defaultVal
+end
+
+local function readGLItemOrInt(alias, fallback)
+    if getValue then
+        for _, t in ipairs({ 1, 5, 0, 2 }) do
+            local ok, val = pcall(getValue, t, alias)
+            if ok and val ~= nil and tostring(val) ~= "" then
+                local res = resolvePickedItemID(val)
+                if res and res > 0 then return res end
+            end
+        end
+        local ok0, val0 = pcall(getValue, alias)
+        if ok0 and val0 ~= nil and tostring(val0) ~= "" then
+            local res = resolvePickedItemID(val0)
+            if res and res > 0 then return res end
+        end
+    end
+    return fallback
 end
 
 syncInputsFromGL = function()
@@ -2739,11 +2824,24 @@ syncInputsFromGL = function()
     if dId ~= "" then CFG.door_id = dId:gsub("%s+", "") end
     local dLbl = readGLString("sb_door_label", "")
     if dLbl ~= "" then CFG.door_label = dLbl end
-    local blkIdIn = tonumber(readGLString("sb_block_id", ""))
-    if blkIdIn and blkIdIn > 0 then CFG.block_id = math.floor(blkIdIn) end
+
+    -- Sinkronisasi Item IDs Secara Presisi & Lengkap
+    local dItemId = readGLItemOrInt("sb_input_id_door", nil) or readGLItemOrInt("sb_pick_id_door", nil)
+    if dItemId and dItemId > 0 then CFG.id_door_itemid = dItemId end
+
+    local bItemId = readGLItemOrInt("sb_input_blocker", nil) or readGLItemOrInt("sb_pick_blocker", nil)
+    if bItemId and bItemId > 0 then CFG.blocker_door_itemid = bItemId end
+
+    local blkIdIn = readGLItemOrInt("sb_block_id", nil)
+    if blkIdIn and blkIdIn > 0 then CFG.block_id = blkIdIn end
     if (not CFG.block_id) or CFG.block_id <= 0 then CFG.block_id = 8772 end
-    local wtrIdIn = tonumber(readGLString("sb_in_water_id", ""))
-    if wtrIdIn and wtrIdIn > 0 then CFG.water_item_id = math.floor(wtrIdIn) end
+
+    local wtrIdIn = readGLItemOrInt("sb_in_water_id", nil)
+    if wtrIdIn and wtrIdIn > 0 then CFG.water_item_id = wtrIdIn end
+
+    local blastIdIn = readGLItemOrInt("sb_in_blast_id", nil)
+    if blastIdIn and blastIdIn > 0 then CFG.blast_item_id = blastIdIn end
+
     persistConfig()
 end
 
@@ -2868,8 +2966,11 @@ local function handleUIValue(vtype, name, value)
         CFG.auto_use_blast = toBoolVal(value)
         persistConfig()
     elseif name == "sb_in_blast_id" then
-        CFG.blast_item_id = tonumber(value) or CFG.blast_item_id
-        persistConfig()
+        local num = resolvePickedItemID(value)
+        if num and num > 0 then
+            CFG.blast_item_id = num
+            persistConfig()
+        end
     elseif name == "sb_world_random" then
         CFG.world_mode = toBoolVal(value) and "random" or "manual"
         persistConfig()
@@ -2905,21 +3006,16 @@ local function handleUIValue(vtype, name, value)
     elseif name == "sb_use_id_door" then
         CFG.use_id_door = toBoolVal(value)
         persistConfig()
-    elseif name == "sb_pick_id_door" then
+    elseif name == "sb_pick_id_door" or name == "sb_input_id_door" then
         if not value or value == "" or value == 0 or value == "0" then return end
         local num = resolvePickedItemID(value)
         if num and num > 0 then
             CFG.id_door_itemid = num
             persistConfig()
-            if editValue then pcall(editValue, "sb_input_id_door", tostring(num)) end
+            if name == "sb_pick_id_door" and editValue then
+                pcall(editValue, "sb_input_id_door", tostring(num))
+            end
             if sendNotification then pcall(sendNotification, "Door ID: " .. resolveItemName(num) .. " (ID: " .. num .. ")") end
-        end
-    elseif name == "sb_input_id_door" then
-        local num = tonumber(value)
-        if num and num > 0 and CFG.id_door_itemid ~= math.floor(num) then
-            CFG.id_door_itemid = math.floor(num)
-            persistConfig()
-            if sendNotification then pcall(sendNotification, "Door ID (Manual): " .. resolveItemName(CFG.id_door_itemid) .. " (ID: " .. CFG.id_door_itemid .. ")") end
         end
     elseif name == "sb_door_id" then
         CFG.door_id = tostring(value or ""):gsub("%s+", "")
@@ -2933,21 +3029,16 @@ local function handleUIValue(vtype, name, value)
     elseif name == "sb_use_blocker" then
         CFG.use_blocker_door = toBoolVal(value)
         persistConfig()
-    elseif name == "sb_pick_blocker" then
+    elseif name == "sb_pick_blocker" or name == "sb_input_blocker" then
         if not value or value == "" or value == 0 or value == "0" then return end
         local num = resolvePickedItemID(value)
         if num and num > 0 then
             CFG.blocker_door_itemid = num
             persistConfig()
-            if editValue then pcall(editValue, "sb_input_blocker", tostring(num)) end
-            if sendNotification then pcall(sendNotification, "Penghalang Kiri: " .. resolveItemName(num) .. " (ID: " .. num .. ")") end
-        end
-    elseif name == "sb_input_blocker" then
-        local num = tonumber(value)
-        if num and num > 0 and CFG.blocker_door_itemid ~= math.floor(num) then
-            CFG.blocker_door_itemid = math.floor(num)
-            persistConfig()
-            if sendNotification then pcall(sendNotification, "Penghalang (Manual): " .. resolveItemName(CFG.blocker_door_itemid) .. " (ID: " .. CFG.blocker_door_itemid .. ")") end
+            if name == "sb_pick_blocker" and editValue then
+                pcall(editValue, "sb_input_blocker", tostring(num))
+            end
+            if sendNotification then pcall(sendNotification, "Penghalang: " .. resolveItemName(num) .. " (ID: " .. num .. ")") end
         end
 
     -- Tab 3: Storage (Gudang Alat, Block & Water)
@@ -3072,14 +3163,21 @@ local function handleUIValue(vtype, name, value)
         if sendNotification then pcall(sendNotification, "Gudang Block dikosongkan!") end
 
     elseif name == "sb_block_id" then
-        CFG.block_id = tonumber(value) or CFG.block_id
-        persistConfig()
+        local num = resolvePickedItemID(value)
+        if num and num > 0 then
+            CFG.block_id = num
+            persistConfig()
+            if sendNotification then pcall(sendNotification, "Block Farm: " .. resolveItemName(num) .. " (ID: " .. num .. ")") end
+        end
     elseif name == "sb_chk_enable_water" then
         CFG.enable_water = toBoolVal(value)
         persistConfig()
     elseif name == "sb_in_water_id" then
-        CFG.water_item_id = tonumber(value) or CFG.water_item_id
-        persistConfig()
+        local num = resolvePickedItemID(value)
+        if num and num > 0 then
+            CFG.water_item_id = num
+            persistConfig()
+        end
     elseif name == "sb_in_water_x" then
         CFG.water_x = tonumber(value) or CFG.water_x
         persistConfig()
@@ -3195,5 +3293,7 @@ _G.inspectWorldSecurityState = inspectWorldSecurityState
 _G.inspectMissingSoilBlocks = inspectMissingSoilBlocks
 _G.setupWorldLocks = setupWorldLocks
 _G.resolvePickedItemID = resolvePickedItemID
+_G.getMissingToolsFromBag = getMissingToolsFromBag
+_G.getInvCount = getInvCount
 _G.addManualWorldsFromString = addManualWorldsFromString
 _G.refreshNativeDisplayLists = refreshNativeDisplayLists
