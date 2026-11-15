@@ -25,7 +25,6 @@ local ITEM = {
     BUILDER_LOCK   = 4994,
     JAMMER         = 226,
     AIR_VENT       = 2810, -- Standar Lucifer: ID 2810 (Air Vent)
-    WOODEN_DOOR    = 12,   -- Standar Lucifer: ID 12 (Door / Wooden Door)
     DOOR           = 12,
     MAIN_DOOR      = 6,    -- White Door
     WHITE_DOOR     = 6,
@@ -35,6 +34,7 @@ local ITEM = {
     LAVA           = 4,
     SOIL_BLOCK     = 8772, -- Fertile Soil Block
     WATER          = 822,  -- Standar Lucifer: ID 822 (Water Bucket)
+    TermonuclearBlat = 1402,
     BLAST_CAVE     = 3562, -- Standar Lucifer: ID 3562 (Cave Blast)
     BLAST_BEACH    = 830,  -- Beach Blast
     BLAST_HARVEST  = 1060, -- Harvest Blast
@@ -272,8 +272,9 @@ local CFG = {
     row_step            = tonumber(getPref("row_step", 2)) or 2,
     row_start_y         = tonumber(getPref("row_start_y", 2)) or 2,
     row_end_y           = tonumber(getPref("row_end_y", 54)) or 54,
-    row_start_x         = tonumber(getPref("row_start_x", 2)) or 2,
+    row_start_x         = tonumber(getPref("row_start_x", 1)) or 1,
     row_end_x           = tonumber(getPref("row_end_x", 98)) or 98, -- Kolom 99 selalu KOSONG untuk jalur lewat
+    put_mode            = getPref("put_mode", "3zigzag"), -- "3zigzag" | "1by1"
 
     -- Delays & Movement Cheats
     delay_place         = tonumber(getPref("delay_place", 120)) or 120,
@@ -321,6 +322,7 @@ do
     if CFG.manual_world_text == "0" then CFG.manual_world_text = "" end
     if CFG.manual_door_text == "0" then CFG.manual_door_text = "" end
     if CFG.row_end_x >= 99 then CFG.row_end_x = 98 end
+    if CFG.row_start_x == 2 then CFG.row_start_x = 1 end
 end
 
 -- 4. RUNTIME BOT STATE
@@ -1904,8 +1906,9 @@ local function inspectMissingSoilBlocks(doorX, doorY)
     local totalExpected = 0
     -- Kolom paling kanan (x = 99) selalu kosong untuk lewat naik-turun/elevator
     local effectiveEndX = math.min(tonumber(CFG.row_end_x) or 98, 98)
+    local minX = math.max(0, tonumber(CFG.row_start_x) or 1)
     for y = CFG.row_start_y, CFG.row_end_y, CFG.row_step do
-        for x = CFG.row_start_x, effectiveEndX do
+        for x = minX, effectiveEndX do
             local inSec = isSecurityAreaTile and isSecurityAreaTile(x, y, doorX, doorY)
             if not inSec then
                 totalExpected = totalExpected + 1
@@ -1951,10 +1954,19 @@ local function putWaterColumn(restockCb)
     return true
 end
 
-local function placeSoilRows(worldName, doorID, restockCb)
-    addLog(string.format("`9[Place Rows] `wMemulai penempatan %s (ID %d)...", resolveItemName(CFG.block_id), CFG.block_id))
+local function placeSoilRows(worldName, doorID, restockCb, doorX, doorY)
+    local modeLabel = (CFG.put_mode == "3zigzag") and "3 Block (Zigzag Cepat)" or "1 by 1"
+    addLog(string.format("`9[Place Rows] `wMemulai penempatan %s (ID %d) [Mode: %s]...", resolveItemName(CFG.block_id), CFG.block_id, modeLabel))
 
+    if not doorX or not doorY then
+        doorX, doorY = findMainDoor()
+    end
+
+    local targetBlockID = (CFG.block_id and CFG.block_id > 0) and CFG.block_id or 8772
     local goingRight = true
+    local effectiveEndX = math.min(tonumber(CFG.row_end_x) or 98, 98)
+    local minX = math.max(0, tonumber(CFG.row_start_x) or 1)
+
     for y = CFG.row_start_y, CFG.row_end_y, CFG.row_step do
         if not STATE.running then break end
         if not waitIfPaused() then break end
@@ -1962,48 +1974,215 @@ local function placeSoilRows(worldName, doorID, restockCb)
         STATE.active_row = y
         updatePowerStatusList()
 
-        local effectiveEndX = math.min(tonumber(CFG.row_end_x) or 98, 98)
-        local startX = goingRight and CFG.row_start_x or effectiveEndX
-        local endX   = goingRight and effectiveEndX or CFG.row_start_x
-        local stepX  = goingRight and 1 or -1
-        goingRight = not goingRight
+        local standY = math.max(0, y - 1)
 
-        local x = startX
-        while (stepX > 0 and x <= endX) or (stepX < 0 and x >= endX) do
-            if not STATE.running then break end
-            if not waitIfPaused() then break end
+        if CFG.put_mode == "3zigzag" then
+            -- MODE PUT 3 BLOCK ZIGZAG CEPAT (Kiri, Tengah, Kanan per titik berdiri)
+            if goingRight then
+                -- Arah KIRI -> KANAN (minX s/d effectiveEndX)
+                local curX = minX
+                while curX <= effectiveEndX do
+                    if not STATE.running then break end
+                    if not waitIfPaused() then break end
 
-            STATE.active_col = x
-
-            local targetBlockID = (CFG.block_id and CFG.block_id > 0) and CFG.block_id or 8772
-            local ok, t = pcall(getTile, x, y)
-            local inSec = isSecurityAreaTile and isSecurityAreaTile(x, y, doorX, doorY)
-            -- HANYA PUT PADA TILE KOSONG (fg == 0) & BUKAN AREA KUNCI, TIDAK ADA BREAK AKTIVITAS
-            if (not inSec) and ok and t and t.fg == 0 then
-                if getInvCount(targetBlockID) <= 0 then
-                    addLog(string.format("`e[Stok Habis] `oBlock habis pada (%d, %d). Mencoba restock...", x, y))
-                    if restockCb then
-                        local okRestock = restockCb()
-                        if not okRestock then
-                            addLog("`4[Konstruksi Terhenti] `oGagal restock block dari Gudang Block.")
-                            return false
-                        end
+                    local count = math.min(3, effectiveEndX - curX + 1)
+                    local sectionTiles = {}
+                    local standX
+                    if count == 3 then
+                        sectionTiles = { curX, curX + 1, curX + 2 }
+                        standX = curX + 1 -- Posisi berdiri di tengah
+                        curX = curX + 3
+                    elseif count == 2 then
+                        sectionTiles = { curX, curX + 1 }
+                        standX = curX
+                        curX = curX + 2
                     else
-                        return false
+                        sectionTiles = { curX }
+                        standX = curX
+                        curX = curX + 1
+                    end
+
+                    -- Filter hanya petak kosong (fg == 0) & di luar proteksi security lock
+                    local neededSpots = {}
+                    for _, tx in ipairs(sectionTiles) do
+                        local inSec = isSecurityAreaTile and isSecurityAreaTile(tx, y, doorX, doorY)
+                        if not inSec then
+                            local ok, t = pcall(getTile, tx, y)
+                            if ok and t and t.fg == 0 then
+                                table.insert(neededSpots, tx)
+                            end
+                        end
+                    end
+
+                    if #neededSpots > 0 then
+                        -- Cek stok sebelum mendekati posisi
+                        if getInvCount(targetBlockID) <= 0 then
+                            addLog(string.format("`e[Stok Habis] `oBlock habis pada baris Y=%d. Mencoba restock...", y))
+                            if restockCb then
+                                if not restockCb() then
+                                    addLog("`4[Konstruksi Terhenti] `oGagal restock block dari Gudang Block.")
+                                    return false
+                                end
+                                doorX, doorY = findMainDoor()
+                            else
+                                return false
+                            end
+                        end
+
+                        STATE.active_col = standX
+
+                        -- Pindah ke koridor udara di atas baris (y - 1)
+                        local px, py = getPlayerTilePos()
+                        if not px or math.abs(px - standX) > 1 or math.abs(py - standY) > 1 then
+                            moveSafeTo(standX, standY)
+                        end
+
+                        for _, tx in ipairs(neededSpots) do
+                            if not STATE.running then break end
+                            if not waitIfPaused() then break end
+
+                            if getInvCount(targetBlockID) <= 0 then
+                                if restockCb and restockCb() then
+                                    doorX, doorY = findMainDoor()
+                                else
+                                    return false
+                                end
+                            end
+
+                            local placed = placeTileAt(tx, y, targetBlockID, false, 1)
+                            if placed then
+                                STATE.total_placed_blocks = STATE.total_placed_blocks + 1
+                                if STATE.total_placed_blocks % 50 == 0 then
+                                    updatePowerStatusList()
+                                end
+                            end
+                        end
                     end
                 end
+            else
+                -- Arah KANAN -> KIRI (effectiveEndX s/d minX)
+                local curX = effectiveEndX
+                while curX >= minX do
+                    if not STATE.running then break end
+                    if not waitIfPaused() then break end
 
-                local placed = placeTileAt(x, y, targetBlockID)
-                if placed then
-                    STATE.total_placed_blocks = STATE.total_placed_blocks + 1
-                    if STATE.total_placed_blocks % 50 == 0 then
-                        updatePowerStatusList()
+                    local count = math.min(3, curX - minX + 1)
+                    local sectionTiles = {}
+                    local standX
+                    if count == 3 then
+                        sectionTiles = { curX, curX - 1, curX - 2 }
+                        standX = curX - 1 -- Posisi berdiri di tengah
+                        curX = curX - 3
+                    elseif count == 2 then
+                        sectionTiles = { curX, curX - 1 }
+                        standX = curX
+                        curX = curX - 2
+                    else
+                        sectionTiles = { curX }
+                        standX = curX
+                        curX = curX - 1
+                    end
+
+                    local neededSpots = {}
+                    for _, tx in ipairs(sectionTiles) do
+                        local inSec = isSecurityAreaTile and isSecurityAreaTile(tx, y, doorX, doorY)
+                        if not inSec then
+                            local ok, t = pcall(getTile, tx, y)
+                            if ok and t and t.fg == 0 then
+                                table.insert(neededSpots, tx)
+                            end
+                        end
+                    end
+
+                    if #neededSpots > 0 then
+                        if getInvCount(targetBlockID) <= 0 then
+                            addLog(string.format("`e[Stok Habis] `oBlock habis pada baris Y=%d. Mencoba restock...", y))
+                            if restockCb then
+                                if not restockCb() then
+                                    addLog("`4[Konstruksi Terhenti] `oGagal restock block dari Gudang Block.")
+                                    return false
+                                end
+                                doorX, doorY = findMainDoor()
+                            else
+                                return false
+                            end
+                        end
+
+                        STATE.active_col = standX
+
+                        local px, py = getPlayerTilePos()
+                        if not px or math.abs(px - standX) > 1 or math.abs(py - standY) > 1 then
+                            moveSafeTo(standX, standY)
+                        end
+
+                        for _, tx in ipairs(neededSpots) do
+                            if not STATE.running then break end
+                            if not waitIfPaused() then break end
+
+                            if getInvCount(targetBlockID) <= 0 then
+                                if restockCb and restockCb() then
+                                    doorX, doorY = findMainDoor()
+                                else
+                                    return false
+                                end
+                            end
+
+                            local placed = placeTileAt(tx, y, targetBlockID, false, -1)
+                            if placed then
+                                STATE.total_placed_blocks = STATE.total_placed_blocks + 1
+                                if STATE.total_placed_blocks % 50 == 0 then
+                                    updatePowerStatusList()
+                                end
+                            end
+                        end
                     end
                 end
             end
 
-            x = x + stepX
+        else
+            -- MODE 1-BY-1 (Satu per satu petak)
+            local startX = goingRight and minX or effectiveEndX
+            local endX   = goingRight and effectiveEndX or minX
+            local stepX  = goingRight and 1 or -1
+
+            local x = startX
+            while (stepX > 0 and x <= endX) or (stepX < 0 and x >= endX) do
+                if not STATE.running then break end
+                if not waitIfPaused() then break end
+
+                STATE.active_col = x
+
+                local ok, t = pcall(getTile, x, y)
+                local inSec = isSecurityAreaTile and isSecurityAreaTile(x, y, doorX, doorY)
+                if (not inSec) and ok and t and t.fg == 0 then
+                    if getInvCount(targetBlockID) <= 0 then
+                        addLog(string.format("`e[Stok Habis] `oBlock habis pada (%d, %d). Mencoba restock...", x, y))
+                        if restockCb then
+                            local okRestock = restockCb()
+                            if not okRestock then
+                                addLog("`4[Konstruksi Terhenti] `oGagal restock block dari Gudang Block.")
+                                return false
+                            end
+                            doorX, doorY = findMainDoor()
+                        else
+                            return false
+                        end
+                    end
+
+                    local placed = placeTileAt(x, y, targetBlockID, false, stepX)
+                    if placed then
+                        STATE.total_placed_blocks = STATE.total_placed_blocks + 1
+                        if STATE.total_placed_blocks % 50 == 0 then
+                            updatePowerStatusList()
+                        end
+                    end
+                end
+
+                x = x + stepX
+            end
         end
+
+        goingRight = not goingRight
     end
 
     addLog(string.format("`2[Place Rows Selesai] `wTotal block terpasang: %d", STATE.total_placed_blocks))
@@ -2213,7 +2392,7 @@ local function runSingleFarmWorld(worldName, worldDoor, manualIdx)
         doorX, doorY = findMainDoor()
     end
 
-    local okRows = placeSoilRows(worldName, activeDoorID, restockFn)
+    local okRows = placeSoilRows(worldName, activeDoorID, restockFn, doorX, doorY)
     if not okRows then
         addLog("`4[Konstruksi Gagal] `oGagal menuntaskan baris block di " .. worldName)
         if manualIdx and CFG.farm_world_list[manualIdx] then
@@ -2948,6 +3127,7 @@ local function registerNativeSoilUI()
     local uiSetting = createNativeUI("4. Pengaturan", "Build")
     uiSetting:addLabelApp("Pengaturan Tata Letak & Gerak", "Build")
     uiSetting:addLabel("Grid Baris Block:")
+    uiSetting:addToggle("Mode Put 3 Block (Zigzag Cepat)", CFG.put_mode == "3zigzag", "sb_toggle_mode_3zigzag", true)
     uiSetting:addSlider("Jarak Baris (Step)", 1, 4, CFG.row_step, 1, false, "sb_in_row_step")
     uiSetting:addSlider("Baris Awal (Y)", 1, 10, CFG.row_start_y, 1, false, "sb_in_start_y")
     uiSetting:addSlider("Baris Akhir (Y)", 40, 56, CFG.row_end_y, 1, false, "sb_in_end_y")
@@ -3558,6 +3738,10 @@ local function handleUIValue(vtype, name, value)
     elseif name == "sb_in_end_y" then
         CFG.row_end_y = tonumber(value) or CFG.row_end_y
         persistConfig()
+    elseif name == "sb_toggle_mode_3zigzag" then
+        CFG.put_mode = (value == true or value == 1 or value == "1") and "3zigzag" or "1by1"
+        persistConfig()
+        addLog(string.format("`9[Pengaturan] `wMode Put: `2%s", (CFG.put_mode == "3zigzag" and "3 Block (Zigzag Cepat)" or "1 by 1")))
     elseif name == "sb_in_start_x" then
         CFG.row_start_x = tonumber(value) or CFG.row_start_x
         persistConfig()
@@ -3626,7 +3810,7 @@ local ALL_UI_ALIASES = {
     "sb_input_add_tool", "sb_input_add_tool_door", "sb_btn_add_tool_direct", "sb_btn_add_cur_tool", "sb_btn_manage_tools", "sb_btn_clear_tool_direct",
     "sb_input_add_block", "sb_input_add_block_door", "sb_btn_add_block_direct", "sb_btn_add_cur_block", "sb_btn_manage_blocks", "sb_btn_clear_block_direct",
     "sb_block_id", "sb_chk_enable_water", "sb_in_water_id", "sb_in_water_x",
-    "sb_in_row_step", "sb_in_start_y", "sb_in_end_y", "sb_in_start_x", "sb_in_end_x",
+    "sb_toggle_mode_3zigzag", "sb_in_row_step", "sb_in_start_y", "sb_in_end_y", "sb_in_start_x", "sb_in_end_x",
     "sb_modfly", "sb_anti_lava", "sb_delay_place", "sb_delay_walk", "sb_delay_punch", "sb_delay_warp",
     "sb_btn_clear_console", "sb_btn_refresh_bag",
 }
@@ -3657,6 +3841,8 @@ _G.SOIL_CFG = CFG
 _G.SOIL_STATE = STATE
 _G.inspectWorldSecurityState = inspectWorldSecurityState
 _G.inspectMissingSoilBlocks = inspectMissingSoilBlocks
+_G.placeSoilRows = placeSoilRows
+_G.handleUIValue = handleUIValue
 _G.setupWorldLocks = setupWorldLocks
 _G.resolvePickedItemID = resolvePickedItemID
 _G.getMissingToolsFromBag = getMissingToolsFromBag
