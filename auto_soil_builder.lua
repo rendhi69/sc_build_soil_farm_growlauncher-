@@ -16,6 +16,7 @@
 -- ============================================================================
 
 -- 1. IDENTITAS ITEM & GLOBAL CONSTANTS
+-- STANDAR DATABASE RESMI GROWTOPIA / LUCIFER (100% PERSIS items.dat)
 local ITEM = {
     WORLD_LOCK     = 242,
     SMALL_LOCK     = 202,
@@ -23,26 +24,29 @@ local ITEM = {
     HUGE_LOCK      = 206,
     BUILDER_LOCK   = 4994,
     JAMMER         = 226,
-    AIR_VENT       = 828,
-    WOODEN_DOOR    = 12,
-    MAIN_DOOR      = 6,
+    AIR_VENT       = 2810, -- Standar Lucifer: ID 2810 (Air Vent)
+    WOODEN_DOOR    = 12,   -- Standar Lucifer: ID 12 (Door / Wooden Door)
+    DOOR           = 12,
+    MAIN_DOOR      = 6,    -- White Door
+    WHITE_DOOR     = 6,
     BEDROCK        = 8,
     DIRT           = 2,
     ROCK           = 10,
     LAVA           = 4,
-    SOIL_BLOCK     = 8772,
-    WATER          = 818,
-    BLAST_WORLD    = 1336,
-    BLAST_CAVE     = 2810,
+    SOIL_BLOCK     = 8772, -- Fertile Soil Block
+    WATER          = 822,  -- Standar Lucifer: ID 822 (Water Bucket)
+    BLAST_CAVE     = 3562, -- Standar Lucifer: ID 3562 (Cave Blast)
+    BLAST_BEACH    = 830,  -- Beach Blast
+    BLAST_HARVEST  = 1060, -- Harvest Blast
     PUNCH          = 18,
     WRENCH         = 32,
-    DOOR           = 102,
-    DUNGEON_DOOR   = 778,
-    PORTAL         = 382,
-    HOUSE_ENTRANCE = 492,
-    SCREEN_DOOR    = 886,
-    PORTCULLIS     = 1032,
-    WOOD_PLATFORM  = 458,
+    WOOD_PLATFORM  = 102,  -- Standar Lucifer: ID 102 (Wooden Platform)
+    DUNGEON_DOOR   = 30,   -- Standar Lucifer: ID 30 (Dungeon Door)
+    PORTAL         = 544,  -- Standar Lucifer: ID 544 (Orange Portal)
+    PORTAL_BLUE    = 546,  -- Standar Lucifer: ID 546 (Blue Portal)
+    HOUSE_ENTRANCE = 224,  -- Standar Lucifer: ID 224 (House Entrance)
+    SCREEN_DOOR    = 858,  -- Standar Lucifer: ID 858 (Screen Door)
+    PORTCULLIS     = 60,   -- Standar Lucifer: ID 60 (Portcullis)
 }
 
 local OTHER_LOCKS = {
@@ -54,25 +58,26 @@ local OTHER_LOCKS = {
 }
 
 local KNOWN_ID_DOOR_IDS = {
-    [ITEM.WOODEN_DOOR]    = true,
-    [ITEM.MAIN_DOOR]      = true,
-    [ITEM.DOOR]           = true,
-    [ITEM.DUNGEON_DOOR]   = true,
-    [ITEM.PORTAL]         = true,
-    [ITEM.HOUSE_ENTRANCE] = true,
+    [12]   = true, -- Wooden Door
+    [6]    = true, -- White Door / Main Door
+    [30]   = true, -- Dungeon Door
+    [60]   = true, -- Portcullis
+    [224]  = true, -- House Entrance
+    [544]  = true, -- Orange Portal
+    [546]  = true, -- Blue Portal
+    [858]  = true, -- Screen Door
+    [2810] = true, -- Air Vent
 }
 
 local KNOWN_BLOCKER_IDS = {
-    [828]  = true, -- Air Vent
-    [492]  = true, -- House Entrance
-    [1240] = true, -- House Entrance alt
-    [886]  = true, -- Screen Door
-    [558]  = true, -- Screen Door alt
-    [1032] = true, -- Portcullis
-    [16]   = true, -- Portcullis alt
-    [540]  = true, -- Dungeon Door
+    [2810] = true, -- Air Vent (Standar Lucifer)
     [12]   = true, -- Wooden Door
-    [102]  = true, -- Door
+    [30]   = true, -- Dungeon Door
+    [60]   = true, -- Portcullis
+    [224]  = true, -- House Entrance
+    [858]  = true, -- Screen Door
+    [544]  = true, -- Orange Portal
+    [546]  = true, -- Blue Portal
 }
 
 local function isDoorOrEntranceItem(id, name)
@@ -89,45 +94,63 @@ end
 
 local DOOR_ID_PRESETS = {
     { id = 12,   name = "Wooden Door (12)" },
-    { id = 102,  name = "Door (102)" },
-    { id = 540,  name = "Dungeon Door (540)" },
-    { id = 382,  name = "Portal (382)" },
+    { id = 30,   name = "Dungeon Door (30)" },
+    { id = 544,  name = "Orange Portal (544)" },
+    { id = 224,  name = "House Entrance (224)" },
+    { id = 2810, name = "Air Vent (2810)" },
 }
 
 local BLOCKER_DOOR_PRESETS = {
-    { id = 828,  name = "Air Vent (828)" },
-    { id = 492,  name = "House Entrance (492)" },
-    { id = 886,  name = "Screen Door (886)" },
-    { id = 1032, name = "Portcullis (1032)" },
+    { id = 2810, name = "Air Vent (2810)" },
     { id = 12,   name = "Wooden Door (12)" },
-    { id = 102,  name = "Door (102)" },
-    { id = 540,  name = "Dungeon Door (540)" },
+    { id = 30,   name = "Dungeon Door (30)" },
+    { id = 60,   name = "Portcullis (60)" },
+    { id = 224,  name = "House Entrance (224)" },
+    { id = 858,  name = "Screen Door (858)" },
+    { id = 544,  name = "Orange Portal (544)" },
 }
 
 local ITEM_NAME_CACHE = {
-    [242]  = "World Lock",
+    [0]    = "Blank",
+    [2]    = "Dirt",
+    [3]    = "Dirt Seed",
+    [4]    = "Lava",
+    [5]    = "Lava Seed",
+    [6]    = "White Door",
+    [8]    = "Bedrock",
+    [10]   = "Rock",
+    [11]   = "Rock Seed",
+    [12]   = "Wooden Door",
+    [13]   = "Wooden Door Seed",
+    [18]   = "Fist",
+    [30]   = "Dungeon Door",
+    [31]   = "Dungeon Door Seed",
+    [32]   = "Wrench",
+    [60]   = "Portcullis",
+    [61]   = "Portcullis Seed",
+    [102]  = "Wooden Platform",
+    [103]  = "Wooden Platform Seed",
     [202]  = "Small Lock",
     [204]  = "Big Lock",
     [206]  = "Huge Lock",
-    [4994] = "Builder's Lock",
+    [224]  = "House Entrance",
+    [225]  = "House Entrance Seed",
     [226]  = "Signal Jammer",
-    [828]  = "Air Vent",
-    [12]   = "Wooden Door",
-    [102]  = "Door",
-    [540]  = "Dungeon Door",
-    [382]  = "Portal",
-    [492]  = "House Entrance",
-    [886]  = "Screen Door",
-    [1032] = "Portcullis",
-    [6]    = "White Door",
-    [8]    = "Bedrock",
-    [2]    = "Dirt",
-    [10]   = "Rock",
-    [4]    = "Lava",
-    [8772] = "Soil Block",
-    [818]  = "Water",
-    [1336] = "World Blast",
-    [2810] = "Cave Blast",
+    [242]  = "World Lock",
+    [544]  = "Orange Portal",
+    [546]  = "Blue Portal",
+    [822]  = "Water Bucket",
+    [830]  = "Beach Blast",
+    [858]  = "Screen Door",
+    [859]  = "Screen Door Seed",
+    [1060] = "Harvest Blast",
+    [1796] = "Diamond Lock",
+    [2810] = "Air Vent",
+    [2811] = "Air Vent Seed",
+    [3562] = "Cave Blast",
+    [4994] = "Builder's Lock",
+    [8772] = "Fertile Soil",
+    [8773] = "Fertile Soil Seed",
 }
 
 -- 2. JSON SERIALIZER & PREFERENCE STORAGE
@@ -217,7 +240,7 @@ local CFG = {
 
     -- 6. Fitur Water Column (Toggle true / false)
     enable_water        = (getPref("enable_water", false) == true),
-    water_item_id       = tonumber(getPref("water_item_id", 818)) or 818,
+    water_item_id       = tonumber(getPref("water_item_id", 822)) or 822, -- Standar Lucifer: 822 (Water Bucket)
     water_x             = tonumber(getPref("water_x", 0)) or 0,
 
     -- 4 & 5. Lock & Door Enclosure (Kustom Door & Penghalang)
@@ -234,11 +257,11 @@ local CFG = {
     delay_tele_door     = tonumber(getPref("delay_tele_door", 1500)) or 1500,
 
     use_blocker_door    = (getPref("use_blocker_door", true) == true),
-    blocker_door_itemid = tonumber(getPref("blocker_door_itemid", ITEM.WOODEN_DOOR)) or ITEM.WOODEN_DOOR,
+    blocker_door_itemid = tonumber(getPref("blocker_door_itemid", ITEM.AIR_VENT)) or ITEM.AIR_VENT,
 
     -- Auto Blast Settings
     auto_use_blast      = (getPref("auto_use_blast", false) == true),
-    blast_item_id       = tonumber(getPref("blast_item_id", 1336)) or 1336,
+    blast_item_id       = tonumber(getPref("blast_item_id", 3562)) or 3562, -- Standar Lucifer: 3562 (Cave Blast)
 
     -- Random World Settings
     random_target_count = tonumber(getPref("random_target_count", 5)) or 5,
@@ -266,6 +289,12 @@ local CFG = {
 local function persistConfig()
     savePrefData(CFG)
 end
+
+-- Auto-Migrasi ID lama yang salah ke ID resmi Growtopia / Lucifer
+if CFG.blocker_door_itemid == 828 then CFG.blocker_door_itemid = 2810 end
+if CFG.water_item_id == 818 then CFG.water_item_id = 822 end
+if CFG.blast_item_id == 1336 or CFG.blast_item_id == 2810 then CFG.blast_item_id = 3562 end
+
 
 -- Bersihkan entri rusak "0" / kosong hasil bug form lama (world:0) dari config tersimpan
 do
@@ -332,22 +361,29 @@ local refreshNativeDisplayLists
 
 -- 5. RESOLVER NAMA ITEM & LOGGING HELPERS
 local function resolveItemName(itemID)
-    if not itemID or itemID <= 0 then return "None" end
-    if ITEM_NAME_CACHE[itemID] then return ITEM_NAME_CACHE[itemID] end
-    if getItemName then
-        local ok, n = pcall(getItemName, itemID)
-        if ok and n and n ~= "" and not n:find("Unknown") then
-            ITEM_NAME_CACHE[itemID] = n
-            return n
-        end
-    end
-    if getInfo then
-        local ok, info = pcall(getInfo, itemID)
-        if ok and info and info.name and info.name ~= "" then
-            ITEM_NAME_CACHE[itemID] = info.name
+    itemID = tonumber(itemID) or 0
+    if itemID <= 0 then return "None" end
+    -- 1. Cek native GrowLauncher engine (langsung baca items.dat aktif persis Lucifer)
+    if getItemInfoByID then
+        local ok, info = pcall(getItemInfoByID, itemID)
+        if ok and info and type(info.name) == "string" and info.name ~= "" and not info.name:find("Unknown") then
             return info.name
         end
     end
+    if growtopia and growtopia.getItemName then
+        local ok, n = pcall(growtopia.getItemName, itemID)
+        if ok and n and n ~= "" and not tostring(n):find("Unknown") then
+            return tostring(n)
+        end
+    end
+    if getItemName then
+        local ok, n = pcall(getItemName, itemID)
+        if ok and n and n ~= "" and not n:find("Unknown") then
+            return n
+        end
+    end
+    -- 2. Fallback: Standar Cache Lucifer
+    if ITEM_NAME_CACHE[itemID] then return ITEM_NAME_CACHE[itemID] end
     return "Item #" .. tostring(itemID)
 end
 
@@ -1411,7 +1447,7 @@ local function inspectWorldSecurityState(doorX, doorY)
     -- 2. Check Jammer di (doorX - 1, doorY)
     if doorX - 1 >= 0 then
         local ok, t = pcall(getTile, doorX - 1, doorY)
-        if ok and t and (t.fg == ITEM.JAMMER or t.fg == 226 or t.fg == 828) then
+        if ok and t and (t.fg == ITEM.JAMMER or t.fg == 226 or t.fg == 2810) then
             info.has_jammer = true
         end
     end
@@ -1594,7 +1630,7 @@ local function getMissingToolsFromBag(existingSec)
     if CFG.use_id_door and not (existingSec and existingSec.has_id_door) then
         local did = tonumber(CFG.id_door_itemid) or 0
         if did <= 0 or getInvCount(did) <= 0 then
-            for _, altID in ipairs({ ITEM.WOODEN_DOOR, 102, 540, 766, 1240 }) do
+            for _, altID in ipairs({ ITEM.WOODEN_DOOR, 30, 544, 224, 2810 }) do
                 if altID ~= did and getInvCount(altID) > 0 then
                     addLog(string.format("`2[Auto-Pilih Door ID] `wMenemukan %s (#%d) di tas, dijadikan Door ID!", resolveItemName(altID), altID))
                     CFG.id_door_itemid = altID
@@ -1610,7 +1646,7 @@ local function getMissingToolsFromBag(existingSec)
     if CFG.use_blocker_door and not (existingSec and existingSec.has_blocker) then
         local bid = tonumber(CFG.blocker_door_itemid) or 0
         if bid <= 0 or getInvCount(bid) <= 0 then
-            for _, altID in ipairs({ ITEM.WOODEN_DOOR, 828, 1240, 558, 16, 540, 102 }) do
+            for _, altID in ipairs({ ITEM.AIR_VENT, ITEM.WOODEN_DOOR, 30, 60, 224, 858, 544 }) do
                 if altID ~= bid and getInvCount(altID) > 0 then
                     addLog(string.format("`2[Auto-Pilih Blocker] `wMenemukan %s (#%d) di tas, dijadikan Penghalang!", resolveItemName(altID), altID))
                     CFG.blocker_door_itemid = altID
@@ -1715,7 +1751,7 @@ local function ensureToolsFromStorage(existingSec, returnWorld, returnDoor)
                     local foundObjs = findWorldObjectsByItemID(needID)
                     -- Jika Door ID / Blocker spesifik tidak ada di lantai storage, cari alternatif door di lantai!
                     if #foundObjs == 0 and (needID == CFG.blocker_door_itemid or needID == CFG.id_door_itemid) then
-                        for _, altID in ipairs({ ITEM.WOODEN_DOOR, 102, 828, 558, 16, 540, 1240 }) do
+                        for _, altID in ipairs({ ITEM.AIR_VENT, ITEM.WOODEN_DOOR, 30, 60, 224, 858, 544 }) do
                             local altObjs = findWorldObjectsByItemID(altID)
                             if #altObjs > 0 then
                                 foundObjs = altObjs
@@ -2851,7 +2887,7 @@ local function registerNativeSoilUI()
     uiWorld:addDivider()
     uiWorld:addLabel("Fitur Auto Blast & Random:")
     uiWorld:addToggle("Gunakan Blast Otomatis", CFG.auto_use_blast, "sb_chk_auto_blast", true)
-    uiWorld:addInputInt("ID Item Blast", tostring(CFG.blast_item_id), "Blast ID", "1336 / 2810", "Fire", "sb_in_blast_id")
+    uiWorld:addInputInt("ID Item Blast", tostring(CFG.blast_item_id), "Blast ID", "3562 (Cave Blast)", "Fire", "sb_in_blast_id")
     uiWorld:addToggle("Mode Random World", CFG.world_mode == "random", "sb_world_random", true)
     uiWorld:addInputInt("Jumlah World Random", tostring(CFG.random_target_count), "Target", "5", "FormatListNumbered", "sb_random_target")
     uiWorld:addSlider("Panjang Nama", 4, 10, CFG.random_length, 1, false, "sb_random_len")
@@ -2879,7 +2915,7 @@ local function registerNativeSoilUI()
     uiLock:addDivider()
     uiLock:addToggle("Pasang Penghalang Kiri", CFG.use_blocker_door, "sb_use_blocker", true)
     uiLock:addItemPicker("Pilih Item Penghalang", ITEM_NAME_CACHE[CFG.blocker_door_itemid] or resolveItemName(CFG.blocker_door_itemid), tostring(CFG.blocker_door_itemid), "sb_pick_blocker")
-    uiLock:addInputInt("ID Item Penghalang (Manual)", tostring(CFG.blocker_door_itemid), "Item ID", "12 (Wooden Door) / 828 (Air Vent)", "DoorFront", "sb_input_blocker")
+    uiLock:addInputInt("ID Item Penghalang (Manual)", tostring(CFG.blocker_door_itemid), "Item ID", "2810 (Air Vent) / 12 (Wooden Door)", "DoorFront", "sb_input_blocker")
 
     -- Tab 3: Storage (Gudang Alat & Gudang Block & Water)
     local uiStorage = createNativeUI("3. Storage", "Inventory")
@@ -2905,7 +2941,7 @@ local function registerNativeSoilUI()
     uiStorage:addLabel("Pengaturan Bahan Block & Water:")
     uiStorage:addInputInt("ID Block Diletakkan", tostring(CFG.block_id), "ID Block", "8772", "Category", "sb_block_id")
     uiStorage:addToggle("Pasang Kolom Water Elevator", CFG.enable_water, "sb_chk_enable_water", true)
-    uiStorage:addInputInt("ID Item Water", tostring(CFG.water_item_id), "Water ID", "818", "Water", "sb_in_water_id")
+    uiStorage:addInputInt("ID Item Water", tostring(CFG.water_item_id), "Water ID", "822", "Water", "sb_in_water_id")
     uiStorage:addSlider("Kolom Water (X)", 0, 10, CFG.water_x, 1, false, "sb_in_water_x")
 
     -- Tab 4: Pengaturan (Tata Letak & Cheats)
@@ -3630,5 +3666,8 @@ _G.refreshNativeDisplayLists = refreshNativeDisplayLists
 
 _G.findWorldObjectsByItemID = findWorldObjectsByItemID
 _G.getInvCount = getInvCount
+_G.ITEM = ITEM
+_G.resolveItemName = resolveItemName
+_G.lookupItemIDByName = lookupItemIDByName
 
 _G.CFG = CFG
