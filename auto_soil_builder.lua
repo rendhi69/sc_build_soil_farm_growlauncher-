@@ -234,6 +234,8 @@ local CFG = {
     delay_warp          = tonumber(getPref("delay_warp", 4000)) or 4000,
     use_modfly          = (getPref("use_modfly", true) == true),
     use_antilava        = (getPref("use_antilava", true) == true),
+    auto_collect        = (getPref("auto_collect", true) == true),
+    collect_range       = tonumber(getPref("collect_range", 3)) or 3,
 }
 
 local function persistConfig()
@@ -530,15 +532,32 @@ local function getWorldNameSafe()
     return ""
 end
 
-local function getInvCount(itemID)
-    if not itemID or itemID <= 0 then return 0 end
+local function getInventorySafe()
     if getInventory then
         local ok, inv = pcall(getInventory)
-        if ok and inv and inv.items then
-            for _, it in pairs(inv.items) do
-                if it and (it.id == itemID or it.itemid == itemID) then
-                    return it.count or it.amount or 0
-                end
+        if ok and type(inv) == "table" then
+            if inv.items and type(inv.items) == "table" then
+                return inv.items
+            end
+            return inv
+        end
+    end
+    return nil
+end
+
+local function getInvCount(itemID)
+    if not itemID or itemID <= 0 then return 0 end
+    if growtopia and growtopia.checkInventoryCount then
+        local ok, cnt = pcall(growtopia.checkInventoryCount, itemID)
+        if ok and type(cnt) == "number" then
+            return cnt
+        end
+    end
+    local items = getInventorySafe()
+    if items then
+        for _, it in pairs(items) do
+            if it and (it.id == itemID or it.itemid == itemID) then
+                return it.amount or it.count or 0
             end
         end
     end
@@ -554,9 +573,65 @@ local function getWorldObjectsSafe()
     if not fn then return nil end
     local ok, objs = pcall(fn)
     if ok and type(objs) == "table" then
+        if objs.objects and type(objs.objects) == "table" then
+            return objs.objects
+        end
         return objs
     end
     return nil
+end
+
+local function collectNearbyFloating(centerX, centerY, customRadius, quickMode, forceCollect)
+    if ((not CFG.auto_collect) and (not forceCollect)) then return 0 end
+    local objs = getWorldObjectsSafe()
+    if not objs then return 0 end
+
+    local px, py = getPlayerTilePos()
+    local refX = centerX or px
+    local refY = centerY or py
+    if not refX or not refY then return 0 end
+
+    local radius = customRadius or CFG.collect_range or 3
+    local collected = 0
+
+    for _, obj in pairs(objs) do
+        if not STATE.running then break end
+        if obj then
+            local objId = obj.id or obj.oid or obj.netid
+            local posX = (obj.pos and obj.pos.x) or obj.x or obj.posX
+            local posY = (obj.pos and obj.pos.y) or obj.y or obj.posY
+            local itemid = obj.itemid or obj.itemId or obj.item_id or 0
+
+            if objId and posX and posY then
+                local ox = math.floor((posX + 10) / 32)
+                local oy = math.floor((posY + 10) / 32)
+                local dist = math.max(math.abs(ox - refX), math.abs(oy - refY))
+
+                if dist <= radius and itemid ~= ITEM.LAVA then
+                    local curAmt = getInvCount(itemid)
+                    if curAmt < 200 then
+                        local curPx, curPy = getPlayerTilePos()
+                        local pDist = (curPx and curPy) and math.max(math.abs(ox - curPx), math.abs(oy - curPy)) or 99
+                        local needWalk = (not quickMode and pDist > 1) or (pDist > 2)
+                        if needWalk and isTileSafeToStand(ox, oy) then
+                            moveSafeTo(ox, oy)
+                        end
+                        pcall(sendPacketRaw, false, {
+                            type  = 11,
+                            value = objId,
+                            x     = posX,
+                            y     = posY,
+                        })
+                        if not quickMode then
+                            safeSleep(20)
+                        end
+                        collected = collected + 1
+                    end
+                end
+            end
+        end
+    end
+    return collected
 end
 
 local function findMainDoor()
@@ -824,6 +899,7 @@ local function breakTileCompletely(tx, ty, clearFg, clearBg, prefDir)
         sendRawAction(tx, ty, ITEM.PUNCH)
         safeSleep(math.max(80, CFG.delay_punch))
     end
+    collectNearbyFloating(tx, ty, 3, true)
 end
 
 -- ============================================================================
@@ -1302,19 +1378,25 @@ local function ensureToolsFromStorage(existingSec, returnWorld, returnDoor)
                     local reqAmt = needed[needID]
                     if getInvCount(needID) < reqAmt then
                         for _, obj in pairs(objs) do
-                            if obj and obj.itemid == needID and obj.pos and obj.id then
-                                local ox = math.floor((obj.pos.x + 10) / 32)
-                                local oy = math.floor((obj.pos.y + 10) / 32)
-                                moveSafeTo(ox, oy)
-                                safeSleep(200)
-                                pcall(sendPacketRaw, false, {
-                                    type  = 11,
-                                    value = obj.id,
-                                    x     = obj.pos.x,
-                                    y     = obj.pos.y,
-                                })
-                                safeSleep(300)
-                                if getInvCount(needID) >= reqAmt then break end
+                            if obj then
+                                local itemid = obj.itemid or obj.itemId or obj.item_id or 0
+                                local objId = obj.id or obj.oid or obj.netid
+                                local posX = (obj.pos and obj.pos.x) or obj.x or obj.posX
+                                local posY = (obj.pos and obj.pos.y) or obj.y or obj.posY
+                                if itemid == needID and objId and posX and posY then
+                                    local ox = math.floor((posX + 10) / 32)
+                                    local oy = math.floor((posY + 10) / 32)
+                                    moveSafeTo(ox, oy)
+                                    safeSleep(200)
+                                    pcall(sendPacketRaw, false, {
+                                        type  = 11,
+                                        value = objId,
+                                        x     = posX,
+                                        y     = posY,
+                                    })
+                                    safeSleep(300)
+                                    if getInvCount(needID) >= reqAmt then break end
+                                end
                             end
                         end
                     end
@@ -1366,32 +1448,38 @@ local function restockSoilBlocksFromStorage(returnWorld, returnDoor)
             local objs = getWorldObjectsSafe()
             if objs then
                 for _, obj in pairs(objs) do
-                    if obj and obj.pos and obj.id then
-                        if needBlock and obj.itemid == CFG.block_id and getInvCount(CFG.block_id) < 150 then
-                            local ox = math.floor((obj.pos.x + 10) / 32)
-                            local oy = math.floor((obj.pos.y + 10) / 32)
-                            moveSafeTo(ox, oy)
-                            safeSleep(180)
-                            pcall(sendPacketRaw, false, {
-                                type  = 11,
-                                value = obj.id,
-                                x     = obj.pos.x,
-                                y     = obj.pos.y,
-                            })
-                            safeSleep(250)
-                        end
-                        if needWater and obj.itemid == CFG.water_item_id and getInvCount(CFG.water_item_id) < 60 then
-                            local ox = math.floor((obj.pos.x + 10) / 32)
-                            local oy = math.floor((obj.pos.y + 10) / 32)
-                            moveSafeTo(ox, oy)
-                            safeSleep(180)
-                            pcall(sendPacketRaw, false, {
-                                type  = 11,
-                                value = obj.id,
-                                x     = obj.pos.x,
-                                y     = obj.pos.y,
-                            })
-                            safeSleep(250)
+                    if obj then
+                        local itemid = obj.itemid or obj.itemId or obj.item_id or 0
+                        local objId = obj.id or obj.oid or obj.netid
+                        local posX = (obj.pos and obj.pos.x) or obj.x or obj.posX
+                        local posY = (obj.pos and obj.pos.y) or obj.y or obj.posY
+                        if objId and posX and posY then
+                            if needBlock and itemid == CFG.block_id and getInvCount(CFG.block_id) < 150 then
+                                local ox = math.floor((posX + 10) / 32)
+                                local oy = math.floor((posY + 10) / 32)
+                                moveSafeTo(ox, oy)
+                                safeSleep(180)
+                                pcall(sendPacketRaw, false, {
+                                    type  = 11,
+                                    value = objId,
+                                    x     = posX,
+                                    y     = posY,
+                                })
+                                safeSleep(250)
+                            end
+                            if needWater and itemid == CFG.water_item_id and getInvCount(CFG.water_item_id) < 60 then
+                                local ox = math.floor((posX + 10) / 32)
+                                local oy = math.floor((posY + 10) / 32)
+                                moveSafeTo(ox, oy)
+                                safeSleep(180)
+                                pcall(sendPacketRaw, false, {
+                                    type  = 11,
+                                    value = objId,
+                                    x     = posX,
+                                    y     = posY,
+                                })
+                                safeSleep(250)
+                            end
                         end
                     end
                 end
@@ -1424,6 +1512,7 @@ end
 local function inspectMissingSoilBlocks(doorX, doorY)
     local missingList = {}
     local totalExpected = 0
+    local targetBlockID = (CFG.block_id and CFG.block_id > 0) and CFG.block_id or 8772
     for y = CFG.row_start_y, CFG.row_end_y, CFG.row_step do
         for x = CFG.row_start_x, CFG.row_end_x do
             local isDoorTile = (doorX and doorY and x == doorX and y == doorY)
@@ -1431,7 +1520,7 @@ local function inspectMissingSoilBlocks(doorX, doorY)
                 totalExpected = totalExpected + 1
                 local ok, t = pcall(getTile, x, y)
                 if ok and t then
-                    if t.fg ~= CFG.block_id and t.fg ~= ITEM.BEDROCK and t.fg ~= ITEM.MAIN_DOOR then
+                    if t.fg ~= targetBlockID and t.fg ~= ITEM.BEDROCK and t.fg ~= ITEM.MAIN_DOOR then
                         table.insert(missingList, { x = x, y = y })
                     end
                 else
@@ -1493,9 +1582,14 @@ local function placeSoilRows(worldName, doorID, restockCb)
 
             STATE.active_col = x
 
+            local targetBlockID = (CFG.block_id and CFG.block_id > 0) and CFG.block_id or 8772
             local ok, t = pcall(getTile, x, y)
-            if ok and t and t.fg ~= CFG.block_id and t.fg ~= ITEM.BEDROCK and t.fg ~= ITEM.MAIN_DOOR then
-                if getInvCount(CFG.block_id) <= 0 then
+            if ok and t and t.fg ~= targetBlockID and t.fg ~= ITEM.BEDROCK and t.fg ~= ITEM.MAIN_DOOR then
+                if t.fg ~= 0 then
+                    breakTileCompletely(x, y, true, false, (stepX > 0 and -1 or 1))
+                end
+
+                if getInvCount(targetBlockID) <= 0 then
                     addLog(string.format("`e[Stok Habis] `oBlock habis pada (%d, %d). Mencoba restock...", x, y))
                     if restockCb then
                         local okRestock = restockCb()
@@ -1508,7 +1602,7 @@ local function placeSoilRows(worldName, doorID, restockCb)
                     end
                 end
 
-                local placed = placeTileAt(x, y, CFG.block_id)
+                local placed = placeTileAt(x, y, targetBlockID)
                 if placed then
                     STATE.total_placed_blocks = STATE.total_placed_blocks + 1
                     if STATE.total_placed_blocks % 50 == 0 then
@@ -1527,6 +1621,7 @@ local function placeSoilRows(worldName, doorID, restockCb)
 end
 
 local function validateAndRepairSoilLayout(worldName, doorID, doorX, doorY, restockCb)
+    local targetBlockID = (CFG.block_id and CFG.block_id > 0) and CFG.block_id or 8772
     for pass = 1, 3 do
         local missingCount, totalExpected, missingList = inspectMissingSoilBlocks(doorX, doorY)
         if missingCount == 0 then return true end
@@ -1536,14 +1631,19 @@ local function validateAndRepairSoilLayout(worldName, doorID, doorX, doorY, rest
             if not STATE.running then return false end
             if not waitIfPaused() then return false end
 
-            if getInvCount(CFG.block_id) <= 0 then
+            local ok, t = pcall(getTile, pos.x, pos.y)
+            if ok and t and t.fg ~= 0 and t.fg ~= targetBlockID and t.fg ~= ITEM.BEDROCK and t.fg ~= ITEM.MAIN_DOOR then
+                breakTileCompletely(pos.x, pos.y, true, false, 1)
+            end
+
+            if getInvCount(targetBlockID) <= 0 then
                 if restockCb then
                     if not restockCb() then return false end
                 else
                     return false
                 end
             end
-            placeTileAt(pos.x, pos.y, CFG.block_id)
+            placeTileAt(pos.x, pos.y, targetBlockID)
         end
         safeSleep(300)
     end
@@ -1673,36 +1773,42 @@ local function runSingleFarmWorld(worldName, worldDoor, manualIdx)
     end
 
     -- 5. Pengecekan & Penempatan Baris Block Soil (Poin 6)
-    local initMissing, totalExp = inspectMissingSoilBlocks(doorX, doorY)
-    if secState.all_ready and initMissing == 0 and totalExp > 0 then
-        addLog(string.format("`2[Cek Status World] `wWorld %s sudah selesai penuh (0 bolong) -> Status DONE!", worldName))
-    else
-        if getInvCount(CFG.block_id) <= 0 then
-            if not restockFn() then
-                addLog("`4[Gagal Stok Awal] `oTidak ada block di tas dan gagal restock.")
-                return false
-            end
-            doorX, doorY = findMainDoor()
-        end
-
-        local okRows = placeSoilRows(worldName, activeDoorID, restockFn)
-        if not okRows then
-            addLog("`4[Konstruksi Gagal] `oGagal menuntaskan baris block di " .. worldName)
-            return false
-        end
-
-        local okRepair = validateAndRepairSoilLayout(worldName, activeDoorID, doorX, doorY, restockFn)
-        if not okRepair then
-            local missingLeft = inspectMissingSoilBlocks(doorX, doorY)
-            addLog(string.format("`4[Validasi Gagal] `oWorld %s masih kurang %d block! TIDAK DITANDAI DONE.", worldName, missingLeft))
+    local targetBlockID = (CFG.block_id and CFG.block_id > 0) and CFG.block_id or 8772
+    if getInvCount(targetBlockID) <= 0 then
+        if not restockFn() then
+            addLog("`4[Gagal Stok Awal] `oTidak ada block di tas dan gagal restock.")
             if manualIdx and CFG.farm_world_list[manualIdx] then
-                CFG.farm_world_list[manualIdx].done = false
-                CFG.farm_world_list[manualIdx].status = string.format("KURANG (%d)", missingLeft)
+                CFG.farm_world_list[manualIdx].status = "STOK HABIS"
                 persistConfig()
                 if updateWorldDisplayList then pcall(updateWorldDisplayList) end
             end
             return false
         end
+        doorX, doorY = findMainDoor()
+    end
+
+    local okRows = placeSoilRows(worldName, activeDoorID, restockFn)
+    if not okRows then
+        addLog("`4[Konstruksi Gagal] `oGagal menuntaskan baris block di " .. worldName)
+        if manualIdx and CFG.farm_world_list[manualIdx] then
+            CFG.farm_world_list[manualIdx].status = "GAGAL PUT"
+            persistConfig()
+            if updateWorldDisplayList then pcall(updateWorldDisplayList) end
+        end
+        return false
+    end
+
+    local okRepair = validateAndRepairSoilLayout(worldName, activeDoorID, doorX, doorY, restockFn)
+    if not okRepair then
+        local missingLeft = inspectMissingSoilBlocks(doorX, doorY)
+        addLog(string.format("`4[Validasi Gagal] `oWorld %s masih kurang %d block! TIDAK DITANDAI DONE.", worldName, missingLeft))
+        if manualIdx and CFG.farm_world_list[manualIdx] then
+            CFG.farm_world_list[manualIdx].done = false
+            CFG.farm_world_list[manualIdx].status = string.format("KURANG (%d)", missingLeft)
+            persistConfig()
+            if updateWorldDisplayList then pcall(updateWorldDisplayList) end
+        end
+        return false
     end
 
     -- 6. HANYA TANDAI DONE JIKA TERVERIFIKASI 100% (0 BOLONG)!
@@ -1772,22 +1878,26 @@ local function botMainLoop()
         else
             -- Mode Manual World Put
             local foundUndone = false
+            local hasAntri = false
             for idx, wItem in ipairs(CFG.farm_world_list) do
                 if not STATE.running then break end
                 if not waitIfPaused() then break end
 
                 if not wItem.done and wItem.status ~= "DONE" then
                     foundUndone = true
-                    wItem.status = "PROSES"
-                    if updateWorldDisplayList then pcall(updateWorldDisplayList) end
-
-                    local ok = runSingleFarmWorld(wItem.name, wItem.door, idx)
-                    if not ok then
-                        if wItem.status == "PROSES" then
-                            wItem.status = "GAGAL"
-                        end
+                    if wItem.status == "ANTRI" or wItem.status == "PROSES" then
+                        hasAntri = true
+                        wItem.status = "PROSES"
                         if updateWorldDisplayList then pcall(updateWorldDisplayList) end
-                        safeSleep(2000)
+
+                        local ok = runSingleFarmWorld(wItem.name, wItem.door, idx)
+                        if not ok then
+                            if wItem.status == "PROSES" then
+                                wItem.status = "GAGAL"
+                            end
+                            if updateWorldDisplayList then pcall(updateWorldDisplayList) end
+                            safeSleep(2000)
+                        end
                     end
                 end
             end
@@ -1795,6 +1905,10 @@ local function botMainLoop()
             if not foundUndone then
                 addLog("`2[Antrean Selesai] `wSemua world dalam antrean World Put sudah berstatus DONE!")
                 setStatus("Antrean Selesai", "Semua antrean selesai diproses.")
+                break
+            elseif not hasAntri then
+                addLog("`e[Antrean Selesai] `oSemua antrean telah diproses (beberapa world belum tuntas, cek status di tabel).")
+                setStatus("Selesai (Ada Gagal)", "Semua antrean selesai diproses.")
                 break
             end
         end
@@ -2498,10 +2612,10 @@ end
 
 local function buildBagDisplayRows()
     local rows = {}
-    if getInventory then
-        local ok, inv = pcall(getInventory)
-        if ok and inv and inv.items then
-            for _, it in pairs(inv.items) do
+    local items = getInventorySafe()
+    if items then
+        for _, it in pairs(items) do
+            if it and type(it) == "table" then
                 local id = it.id or it.itemid or 0
                 local cnt = it.count or it.amount or 0
                 if id > 0 and cnt > 0 then
@@ -2572,20 +2686,13 @@ syncInputsFromGL = function()
         STATE.buf_world_door = dIn
         CFG.manual_door_text = dIn
     end
-    local idDoorIn = tonumber(readGLString("sb_input_id_door", ""))
-    if idDoorIn and idDoorIn > 0 then
-        CFG.id_door_itemid = math.floor(idDoorIn)
-    end
-    local blockerIn = tonumber(readGLString("sb_input_blocker", ""))
-    if blockerIn and blockerIn > 0 then
-        CFG.blocker_door_itemid = math.floor(blockerIn)
-    end
     local dId = readGLString("sb_door_id", "")
     if dId ~= "" then CFG.door_id = dId:gsub("%s+", "") end
     local dLbl = readGLString("sb_door_label", "")
     if dLbl ~= "" then CFG.door_label = dLbl end
     local blkIdIn = tonumber(readGLString("sb_block_id", ""))
     if blkIdIn and blkIdIn > 0 then CFG.block_id = math.floor(blkIdIn) end
+    if (not CFG.block_id) or CFG.block_id <= 0 then CFG.block_id = 8772 end
     local wtrIdIn = tonumber(readGLString("sb_in_water_id", ""))
     if wtrIdIn and wtrIdIn > 0 then CFG.water_item_id = math.floor(wtrIdIn) end
     persistConfig()
