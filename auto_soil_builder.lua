@@ -153,7 +153,55 @@ local ITEM_NAME_CACHE = {
     [8773] = "Fertile Soil Seed",
 }
 
--- 2. JSON SERIALIZER & PREFERENCE STORAGE
+-- 2. SAFE ENVIRONMENT HELPERS & PREFERENCE STORAGE
+local function safeDate(fmt)
+    if type(os) == "table" and type(os.date) == "function" then
+        local ok, res = pcall(os.date, fmt or "%H:%M:%S")
+        if ok and res then return tostring(res) end
+    end
+    return "--:--:--"
+end
+
+local function safeClock()
+    if type(os) == "table" and type(os.clock) == "function" then
+        local ok, c = pcall(os.clock)
+        if ok and type(c) == "number" then return c end
+    end
+    return 0
+end
+
+local function safeReadFile(path)
+    if readFile and type(readFile) == "function" then
+        local ok, data = pcall(readFile, path)
+        if ok and data and data ~= "" then return data end
+    end
+    if io and type(io.open) == "function" then
+        local okF, f = pcall(io.open, path, "r")
+        if okF and f then
+            local data = f:read("*a")
+            f:close()
+            return data
+        end
+    end
+    return nil
+end
+
+local function safeWriteFile(path, content)
+    if writeFile and type(writeFile) == "function" then
+        local ok = pcall(writeFile, path, content)
+        if ok then return true end
+    end
+    if io and type(io.open) == "function" then
+        local okF, f = pcall(io.open, path, "w")
+        if okF and f then
+            f:write(content)
+            f:close()
+            return true
+        end
+    end
+    return false
+end
+
 local PREF_FILE = "boren_soil_builder_pref.json"
 
 local function jsonEncode(tbl)
@@ -206,8 +254,8 @@ local function jsonDecode(str)
 end
 
 local function loadPrefData()
-    local ok, content = pcall(readFile, PREF_FILE)
-    if ok and content and content ~= "" then
+    local content = safeReadFile(PREF_FILE)
+    if content and content ~= "" then
         local data = jsonDecode(content)
         if type(data) == "table" then return data end
     end
@@ -222,7 +270,7 @@ end
 
 local function savePrefData(tbl)
     PREFS = tbl or PREFS
-    pcall(writeFile, PREF_FILE, jsonEncode(PREFS))
+    safeWriteFile(PREF_FILE, jsonEncode(PREFS))
 end
 
 -- 3. GLOBAL CONFIGURATION (CFG)
@@ -566,7 +614,7 @@ local function addManualWorldsFromString(rawWorldStr, defaultDoorStr, clearExist
 end
 
 local function addLog(msg)
-    local timestamp = os.date("%H:%M:%S")
+    local timestamp = safeDate("%H:%M:%S")
     local line = string.format("[%s] %s", timestamp, tostring(msg or ""))
     table.insert(STATE.last_log_lines, 1, line)
     while #STATE.last_log_lines > 40 do
@@ -583,15 +631,14 @@ local function setStatus(title, desc)
 end
 
 local function safeSleep(ms)
-    ms = tonumber(ms) or 100
-    if ms <= 0 then return end
-    if CSleep then
-        pcall(CSleep, ms)
-    elseif sleep then
+    ms = tonumber(ms) or 50
+    if ms < 10 then ms = 10 end
+    if sleep then
         pcall(sleep, ms)
-    else
-        local t0 = os.clock()
-        while STATE.running and (os.clock() - t0) * 1000 < ms do end
+    elseif Sleep then
+        pcall(Sleep, ms)
+    elseif CSleep then
+        pcall(CSleep, ms)
     end
 end
 
@@ -1273,7 +1320,7 @@ local function onVariantDialogHook(var, pkt)
             if DIALOG_WATCH.waiting and DIALOG_WATCH.expected_name then
                 if dName == DIALOG_WATCH.expected_name or raw:find(DIALOG_WATCH.expected_name, 1, true) then
                     DIALOG_WATCH.captured_text = raw
-                    DIALOG_WATCH.captured_time = os.clock()
+                    DIALOG_WATCH.captured_time = safeClock()
                     DIALOG_WATCH.waiting = false
                 end
             end
@@ -1326,8 +1373,8 @@ local function wrenchAndAwaitDialog(tx, ty, expectedDialogName, standX, standY)
 
         sendRawAction(tx, ty, ITEM.WRENCH)
 
-        local t0 = os.clock()
-        while DIALOG_WATCH.waiting and (os.clock() - t0) < 2.0 do
+        local t0 = safeClock()
+        while DIALOG_WATCH.waiting and (safeClock() - t0) < 2.0 do
             safeSleep(50)
         end
 
@@ -2631,7 +2678,11 @@ local function botMainLoop()
                     STATE.active_door = wItem.door or ""
                     if updateWorldDisplayList then pcall(updateWorldDisplayList) end
 
-                    local ok = runSingleFarmWorld(wItem.name, wItem.door, idx)
+                    local okCall, okResult = pcall(runSingleFarmWorld, wItem.name, wItem.door, idx)
+                    local ok = okCall and okResult
+                    if not okCall then
+                        addLog("`4[World Error] `o" .. tostring(okResult))
+                    end
                     if not ok then
                         if not STATE.running then
                             -- Dihentikan manual oleh user: kembalikan status ke ANTRI agar langsung bisa di-run lagi
@@ -2696,7 +2747,16 @@ local function startSoilBot()
     -- WAJIB runCoroutine (sama seperti auto_dirt_farm.lua). runThread = native thread terpisah,
     -- baca memori game (inventory / object list) dari situ tidak reliable -> item "tidak terdeteksi".
     if runCoroutine then
-        local ok, err = pcall(runCoroutine, botMainLoop)
+        local ok, err = pcall(runCoroutine, function()
+            local okMain, errMain = pcall(botMainLoop)
+            if not okMain then
+                STATE.running = false
+                addLog("`4[Runtime Error] `o" .. tostring(errMain))
+                setStatus("Error Runtime", tostring(errMain))
+                if editToggle then pcall(editToggle, "sb_run_power", false) end
+                if updatePowerStatusList then pcall(updatePowerStatusList) end
+            end
+        end)
         if not ok then
             STATE.running = false
             if editToggle then pcall(editToggle, "sb_run_power", false) end
@@ -2705,9 +2765,13 @@ local function startSoilBot()
             if updatePowerStatusList then pcall(updatePowerStatusList) end
         end
     elseif runThread then
-        runThread(botMainLoop)
+        runThread(function()
+            pcall(botMainLoop)
+        end)
     else
-        botMainLoop()
+        addLog("`4[Error] `orunCoroutine atau runThread tidak tersedia di Growlauncher ini.")
+        STATE.running = false
+        if editToggle then pcall(editToggle, "sb_run_power", false) end
     end
 end
 
@@ -3309,12 +3373,18 @@ local function registerNativeSoilUI()
     uiBackpack:addDisplayList("Isi Backpack", "Default", "sb_bag_display_list")
 
     -- Registrasi Kategori Tunggal & 5 Sub-Menu Resmi ke GrowLauncher
+    local ok1, jsonWorld = pcall(function() return uiWorld:generateJSON() end)
+    local ok2, jsonLock = pcall(function() return uiLock:generateJSON() end)
+    local ok3, jsonStorage = pcall(function() return uiStorage:generateJSON() end)
+    local ok4, jsonSetting = pcall(function() return uiSetting:generateJSON() end)
+    local ok5, jsonBackpack = pcall(function() return uiBackpack:generateJSON() end)
+
     pcall(addCategory, "Boren Soil", "Storefront")
-    pcall(addIntoModule, uiWorld:generateJSON(), "Boren Soil")
-    pcall(addIntoModule, uiLock:generateJSON(), "Boren Soil")
-    pcall(addIntoModule, uiStorage:generateJSON(), "Boren Soil")
-    pcall(addIntoModule, uiSetting:generateJSON(), "Boren Soil")
-    pcall(addIntoModule, uiBackpack:generateJSON(), "Boren Soil")
+    if ok1 and jsonWorld then pcall(addIntoModule, jsonWorld, "Boren Soil") end
+    if ok2 and jsonLock then pcall(addIntoModule, jsonLock, "Boren Soil") end
+    if ok3 and jsonStorage then pcall(addIntoModule, jsonStorage, "Boren Soil") end
+    if ok4 and jsonSetting then pcall(addIntoModule, jsonSetting, "Boren Soil") end
+    if ok5 and jsonBackpack then pcall(addIntoModule, jsonBackpack, "Boren Soil") end
 end
 
 -- ============================================================================
@@ -3558,7 +3628,7 @@ local function handleUIValue(vtype, name, value)
     name = tostring(name or "")
     if name == "" then return end
 
-    local now = os.clock()
+    local now = safeClock()
     local isButton = (name:sub(1, 7) == "sb_btn_")
     if isButton then
         if lastAliasEventTime[name] and (now - lastAliasEventTime[name]) < 0.25 then
@@ -3570,15 +3640,14 @@ local function handleUIValue(vtype, name, value)
     -- Tab 1: Start & World
     if name == "sb_run_power" then
         local wantRun = toBoolVal(value)
-        if wantRun and not STATE.running then
-            startSoilBot()
-        elseif not wantRun and STATE.running then
-            stopSoilBot()
-        elseif not STATE.running then
-            -- Fallback jika widget toggle GL desync dari stop button: jika bot sedang mati, klik toggle = START!
-            startSoilBot()
+        if wantRun then
+            if not STATE.running then
+                startSoilBot()
+            end
         else
-            stopSoilBot()
+            if STATE.running then
+                stopSoilBot()
+            end
         end
         return
     elseif name == "sb_btn_start" then
@@ -3659,14 +3728,14 @@ local function handleUIValue(vtype, name, value)
             local d = (w.door and w.door ~= "") and w.door or ""
             table.insert(lines, (d ~= "") and (w.name .. ":" .. d) or w.name)
         end
-        pcall(writeFile, CFG.world_file_name, table.concat(lines, "\n"))
+        safeWriteFile(CFG.world_file_name, table.concat(lines, "\n"))
         persistConfig()
         if sendNotification then pcall(sendNotification, string.format("Antrean disimpan ke %s (%d world)", CFG.world_file_name, #CFG.farm_world_list)) end
     elseif name == "sb_btn_load_worlds" then
         local fIn = readGLString("sb_world_file", CFG.world_file_name)
         if fIn ~= "" then CFG.world_file_name = fIn end
-        local ok, content = pcall(readFile, CFG.world_file_name)
-        if ok and content and content ~= "" then
+        local content = safeReadFile(CFG.world_file_name)
+        if content and content ~= "" then
             local parsed = parseWorldBatchFromString(content)
             for _, item in ipairs(parsed) do
                 table.insert(CFG.farm_world_list, { name = item.name, door = item.door, status = "ANTRI", done = false })

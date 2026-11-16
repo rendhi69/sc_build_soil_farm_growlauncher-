@@ -6,7 +6,8 @@
 -- ============================================================================
 
 local RAW_URL = "https://raw.githubusercontent.com/rendhi69/sc_build_soil_farm_growlauncher-/main/auto_soil_builder.lua"
-local fetchUrl = RAW_URL .. "?v=" .. tostring(os.time())
+local cacheBuster = tostring(math.floor((os and os.time and os.time()) or (os and os.clock and os.clock() * 1000) or math.random(100000, 999999)))
+local fetchUrl = RAW_URL .. "?v=" .. cacheBuster
 
 local function notifyUser(msg)
     if sendNotification then
@@ -24,10 +25,10 @@ notifyUser("Memuat Auto Soil Builder...")
 local content, err = nil, nil
 if fetch then
     local okFetch, res, fetchErr = pcall(fetch, fetchUrl)
-    if okFetch and res and res ~= "" then
+    if okFetch and res and type(res) == "string" and res ~= "" and not res:match("^404") and (res:find("AUTO SOIL") or res:find("Boren Store")) then
         content = res
     else
-        err = fetchErr or "Respons kosong"
+        err = fetchErr or "Respons invalid atau kosong"
     end
 end
 
@@ -62,7 +63,8 @@ if not content or content == "" then
 end
 
 if content and content ~= "" then
-    local chunk, loadErr = load(content)
+    local loaderFn = loadstring or load
+    local chunk, loadErr = loaderFn(content)
     if chunk then
         local okExec, runErr = pcall(chunk)
         if okExec then
