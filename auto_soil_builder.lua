@@ -2090,28 +2090,97 @@ local function inspectMissingSoilBlocks(doorX, doorY)
     return #missingList, totalExpected, missingList
 end
 
+local function tileHasWaterFlag(t)
+    if not t then return false end
+    if t.water == true or t.hasWater == true then return true end
+    local fl = tonumber(t.flag or t.flags) or 0
+    -- TILEFLAG_WATER = 0x0400 (1024), kompatibel Lua 5.1/5.4
+    return (math.floor(fl / 1024) % 2) == 1
+end
+
+local function placeWaterOnceSafe(tx, ty, waterID, preferredDirX)
+    if tx < 0 or tx > 99 or ty < 0 or ty > 53 then return false end
+    local ok, t = pcall(getTile, tx, ty)
+    if not ok or not t then return false end
+    if (tonumber(t.fg) or 0) ~= 0 then return true end
+    if tileHasWaterFlag(t) then return true end
+    if getInvCount(waterID) <= 0 then return false end
+
+    local function attemptSinglePut()
+        local okP, tP = pcall(getTile, tx, ty)
+        if not okP or not tP or (tonumber(tP.fg) or 0) ~= 0 or tileHasWaterFlag(tP) then return true end
+        local flagBefore = tonumber(tP.flag or tP.flags) or 0
+        local invBefore  = getInvCount(waterID)
+        if invBefore <= 0 then return false end
+
+        local px, py = getPlayerTilePos()
+        local outOfRange = (not px) or (math.abs(px - tx) > 2) or (math.abs(py - ty) > 2)
+        local onTarget   = (px == tx and py == ty)
+        if outOfRange or onTarget then
+            moveAdjacentSafe(tx, ty, preferredDirX)
+        end
+
+        local okP2, tP2 = pcall(getTile, tx, ty)
+        if okP2 and tP2 and tileHasWaterFlag(tP2) then return true end
+
+        sendRawAction(tx, ty, waterID)
+        safeSleep(math.min(math.max(140, tonumber(CFG.delay_place) or 180), 160))
+
+        local waited = 0
+        while waited < 850 and STATE.running do
+            local okN, tN = pcall(getTile, tx, ty)
+            if okN and tN then
+                if tileHasWaterFlag(tN) then return true end
+                local flagNow = tonumber(tN.flag or tN.flags) or 0
+                if flagNow ~= flagBefore then return true end
+            end
+            if invBefore > 0 and getInvCount(waterID) < invBefore then
+                return true
+            end
+            safeSleep(50)
+            waited = waited + 50
+        end
+        return false
+    end
+
+    if attemptSinglePut() then return true end
+    if not STATE.running then return false end
+    moveAdjacentSafe(tx, ty, preferredDirX)
+    safeSleep(150)
+    local okC, tC = pcall(getTile, tx, ty)
+    if okC and tC and tileHasWaterFlag(tC) then return true end
+    return attemptSinglePut()
+end
+
 local function putWaterColumn(restockCb)
     if not CFG.enable_water then return true end
-    addLog(string.format("`9[Water Elevator] `wMenempatkan kolom air vertikal di X=%d (Y=1 s/d 54)...", CFG.water_x))
-    setStatus("Pasang Water", string.format("Kolom Air di X=%d", CFG.water_x))
-
-    for y = 1, 54 do
+    local waterCols = {
+        { x = 0,  dir = 1,  label = "Pojok Kiri (X=0)" },
+        { x = 99, dir = -1, label = "Pojok Kanan (X=99)" },
+    }
+    for _, col in ipairs(waterCols) do
         if not STATE.running then break end
-        if not waitIfPaused() then break end
+        addLog(string.format("`9[Water Elevator] `wMenempatkan air %s dari atas ke bawah (Y=0..53) [1x tervalidasi/tile]...", col.label))
+        setStatus("Pasang Water", col.label)
 
-        local ok, t = pcall(getTile, CFG.water_x, y)
-        if ok and t and t.fg == 0 then
-            if getInvCount(CFG.water_item_id) <= 0 then
-                if restockCb then
-                    if not restockCb() then
-                        addLog("`4[Water Habis] `oGagal restock air dari Gudang.")
+        for y = 0, 53 do
+            if not STATE.running then break end
+            if not waitIfPaused() then break end
+
+            local ok, t = pcall(getTile, col.x, y)
+            if ok and t and (tonumber(t.fg) or 0) == 0 and (not tileHasWaterFlag(t)) then
+                if getInvCount(CFG.water_item_id) <= 0 then
+                    if restockCb then
+                        if not restockCb() then
+                            addLog("`4[Water Habis] `oGagal restock air dari Gudang.")
+                            return false
+                        end
+                    else
                         return false
                     end
-                else
-                    return false
                 end
+                placeWaterOnceSafe(col.x, y, CFG.water_item_id, col.dir)
             end
-            placeTileAt(CFG.water_x, y, CFG.water_item_id)
         end
     end
     return true
