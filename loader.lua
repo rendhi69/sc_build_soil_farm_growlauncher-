@@ -42,7 +42,6 @@ if not content or content == "" then
         "/storage/emulated/0/Android/media/launcher.powerkuy.growlauncher/ScriptLua/script code/auto_soil_builder.lua",
         "/storage/emulated/0/Android/data/launcher.powerkuy.growlauncher/files/ScriptLua/auto_soil_builder.lua",
         "/storage/emulated/0/Download/auto_soil_builder.lua",
-        "d:/rotasi 2026/SC LAMA OLD JUTUN/sc growlauncher/script/script code/auto_soil_builder.lua",
         "script/script code/auto_soil_builder.lua",
         "auto_soil_builder.lua"
     }
