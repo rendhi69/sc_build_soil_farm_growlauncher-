@@ -292,6 +292,7 @@ local CFG = {
     water_x             = tonumber(getPref("water_x", 0)) or 0,
 
     -- 4 & 5. Lock & Door Enclosure (Kustom Door & Penghalang)
+    ignore_lock         = (getPref("ignore_lock", false) == true),
     use_wl              = (getPref("use_wl", true) == true),
     wl_public           = (getPref("wl_public", true) == true),
     use_sl              = (getPref("use_sl", true) == true),
@@ -1601,6 +1602,14 @@ end
 -- Helper: Identifikasi tile area kunci & proteksi agar tidak tertabrak atau ter-break saat put
 local function isSecurityAreaTile(x, y, doorX, doorY)
     if not doorX or not doorY then return false end
+    if CFG.ignore_lock then
+        if x == doorX and y == doorY then return true end
+        local ok, t = pcall(getTile, x, y)
+        if ok and t and (t.fg == ITEM.WORLD_LOCK or (OTHER_LOCKS and OTHER_LOCKS[t.fg])) then
+            return true
+        end
+        return false
+    end
     if x == doorX and y == doorY then return true end       -- White Door
     if x == doorX and y == doorY - 1 then return true end   -- Penghalang (di atas White Door, di kanan SL)
     if x == doorX - 1 and y == doorY then return true end   -- Jammer (di kiri White Door)
@@ -1655,6 +1664,10 @@ local function checkAndConfigureDoorID()
 end
 
 local function setupWorldLocks(doorX, doorY, existingSec)
+    if CFG.ignore_lock then
+        addLog("`2[Ignore Lock] `wMelewati setup lock/security, langsung mulai pasang soil...")
+        return ""
+    end
     local sec = existingSec or inspectWorldSecurityState(doorX, doorY)
     
     -- VALIDASI: Jika seluruh komponen kunci sudah terpasang, TIDAK USAH mencoba membuat/break lagi!
@@ -1768,6 +1781,7 @@ end
 -- 11. MULTI-STORAGE RESTOCK ENGINE (Poin 2 & 3)
 -- ============================================================================
 local function getMissingToolsFromBag(existingSec)
+    if CFG.ignore_lock then return {}, {}, {} end
     local needed = {}
     local neededOrder = {}
     local neededRoles = {}
@@ -1880,6 +1894,7 @@ local function dropExcessItem(itemID, keepAmt)
 end
 
 local function ensureToolsFromStorage(existingSec, returnWorld, returnDoor)
+    if CFG.ignore_lock then return true end
     local missingBefore, needed, neededOrder = getMissingToolsFromBag(existingSec)
     if #missingBefore == 0 then return true end
 
@@ -2552,7 +2567,11 @@ local function runSingleFarmWorld(worldName, worldDoor, manualIdx)
     local activeDoorID = worldDoor or ""
     local secState = inspectWorldSecurityState(doorX, doorY)
 
-    if secState.all_ready then
+    if CFG.ignore_lock then
+        addLog("`2[Ignore Lock] `wMode Ignore Lock AKTIF (Bukan Owner). Langsung mulai pasang soil tanpa setup lock/door!")
+        setStatus("Ignore Lock Soil", "Ignore Lock AKTIF di " .. worldName .. "! Langsung lanjut buat Soil...")
+        activeDoorID = worldDoor or ""
+    elseif secState.all_ready then
         addLog("`2[Proteksi World] `wSemua Lock, Jammer & Door sudah lengkap di " .. worldName)
         if CFG.use_id_door and activeDoorID == "" then
             activeDoorID = CFG.door_id
@@ -3366,6 +3385,7 @@ local function registerNativeSoilUI()
     local uiLock = createNativeUI("2. Lock & Door", "Lock")
     uiLock:addLabelApp("Proteksi Lock & Door", "Lock")
     uiLock:addTooltip("Posisi Lock", "Jammer kiri door, SL atas jammer, WL kiri jammer, Penghalang atas WL, Door ID di (0,0).", "Verified", false)
+    uiLock:addToggle("Ignore Lock (Bukan Owner)", CFG.ignore_lock, "sb_ignore_lock", true)
     uiLock:addToggle("World Lock (WL)", CFG.use_wl, "sb_use_wl", true)
     uiLock:addToggle("WL Public", CFG.wl_public, "sb_wl_public", true)
     uiLock:addDivider()
@@ -3838,6 +3858,9 @@ local function handleUIValue(vtype, name, value)
         persistConfig()
 
     -- Tab 2: Lock & Door
+    elseif name == "sb_ignore_lock" then
+        CFG.ignore_lock = toBoolVal(value)
+        persistConfig()
     elseif name == "sb_use_wl" then
         CFG.use_wl = toBoolVal(value)
         persistConfig()
@@ -4117,7 +4140,7 @@ local ALL_UI_ALIASES = {
     "sb_btn_add_world", "sb_btn_add_cur_world", "sb_btn_view_worlds", "sb_btn_clear_worlds",
     "sb_world_file", "sb_btn_save_worlds", "sb_btn_load_worlds",
     "sb_chk_auto_blast", "sb_in_blast_id", "sb_world_random", "sb_random_target", "sb_random_len", "sb_random_num",
-    "sb_use_wl", "sb_wl_public", "sb_use_sl", "sb_sl_ignore", "sb_sl_public",
+    "sb_ignore_lock", "sb_use_wl", "sb_wl_public", "sb_use_sl", "sb_sl_ignore", "sb_sl_public",
     "sb_use_jammer", "sb_use_id_door", "sb_pick_id_door", "sb_input_id_door", "sb_door_id", "sb_door_label", "sb_delay_tele_door",
     "sb_use_blocker", "sb_pick_blocker", "sb_input_blocker",
     "sb_input_add_tool", "sb_input_add_tool_door", "sb_btn_add_tool_direct", "sb_btn_add_cur_tool", "sb_btn_manage_tools", "sb_btn_clear_tool_direct",
