@@ -1,13 +1,14 @@
 -- ============================================================================
--- LOADER BOREN STORE - AUTO SOIL BUILDER (CONSOLE IMGUI)
+-- LOADER BOREN STORE - BOREN STORE - AUTO BUILD SOIL FARM PRO (CONSOLE IMGUI)
 -- File: loader_soil_builder.lua
 -- ============================================================================
--- Memuat antarmuka Console ImGui khusus Auto Soil & Block Farm Builder.
+-- Memuat antarmuka Console ImGui khusus Build Soil.
 -- 100% Berbasis antarmuka Console ImGui Modern (Bukan Menu Native Lama).
 -- Dilengkapi auto-fetch dari GitHub, cache-busting, dan fallback file lokal.
+-- Repo: https://github.com/rendhi69/sc_build_soil_farm_growlauncher-.git
 -- ============================================================================
 
-local BASE_URL = "https://raw.githubusercontent.com/rendhi69/sc_auto_plant_growlauncher/main/"
+local BASE_URL = "https://raw.githubusercontent.com/rendhi69/sc_build_soil_farm_growlauncher-/main/"
 local BOOT_PATH = "imgui_hub/boot.lua"
 local TARGET_FEATURE = "build_soil"
 
@@ -32,7 +33,7 @@ local function makeTag()
 end
 
 local function logMsg(msg)
-    if LogToConsole then pcall(LogToConsole, "`e[BOREN SOIL BUILDER] `w" .. tostring(msg)) end
+    if LogToConsole then pcall(LogToConsole, "`e[BOREN BUILD SOIL] `w" .. tostring(msg)) end
 end
 
 local function notifyUser(msg)
@@ -40,8 +41,8 @@ local function notifyUser(msg)
     elseif growtopia and growtopia.notify then pcall(growtopia.notify, tostring(msg)) end
 end
 
-logMsg("`9Menghubungkan ke GitHub dan memuat Console AUTO SOIL BUILDER...")
-notifyUser("Memuat Console AUTO SOIL BUILDER...")
+logMsg("`9Menghubungkan ke GitHub dan memuat Console BUILD SOIL...")
+notifyUser("Memuat Console BUILD SOIL...")
 
 local code = nil
 if fetch then
@@ -71,7 +72,7 @@ if not code or code == "" then
 end
 
 if not code or code == "" then
-    logMsg("`4Gagal memuat Console AUTO SOIL BUILDER! Periksa koneksi internet / file lokal.")
+    logMsg("`4Gagal memuat Console BUILD SOIL! Periksa koneksi internet / file lokal.")
     notifyUser("Gagal memuat Console!")
     return
 end
@@ -92,5 +93,5 @@ if not okRun or type(boot) ~= "table" or type(boot.start) ~= "function" then
 end
 
 boot.start(BASE_URL, TARGET_FEATURE)
-logMsg("`2Console AUTO SOIL BUILDER Siap Digunakan!")
-notifyUser("Console AUTO SOIL BUILDER Siap!")
+logMsg("`2Console BUILD SOIL Siap Digunakan!")
+notifyUser("Console BUILD SOIL Siap!")

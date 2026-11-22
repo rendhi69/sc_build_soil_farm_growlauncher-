@@ -1,8 +1,8 @@
 -- ============================================================================
--- LOADER AUTO SOIL & BLOCK BUILDER - BOREN STORE
+-- LOADER BOREN STORE - AUTO BUILD SOIL FARM PRO
 -- ============================================================================
--- Skrip ini memuat auto_soil_builder.lua untuk penempatan block soil sesuai
--- Layout Gambar 1 & Pengaman Kunci Gambar 2, dengan auto-fetch & local fallback.
+-- Mengambil dan menjalankan auto_soil_builder.lua langsung dari GitHub:
+-- https://github.com/rendhi69/sc_build_soil_farm_growlauncher-.git
 -- ============================================================================
 
 local RAW_URL = "https://raw.githubusercontent.com/rendhi69/sc_build_soil_farm_growlauncher-/main/auto_soil_builder.lua"
@@ -10,79 +10,61 @@ local cacheBuster = tostring(math.floor((os and os.time and os.time()) or (os an
 local fetchUrl = RAW_URL .. "?v=" .. cacheBuster
 
 local function notifyUser(msg)
-    if sendNotification then
-        pcall(sendNotification, msg)
-    elseif growtopia and growtopia.notify then
-        pcall(growtopia.notify, msg)
-    end
+    if sendNotification then pcall(sendNotification, tostring(msg))
+    elseif growtopia and growtopia.notify then pcall(growtopia.notify, tostring(msg)) end
 end
 
-if LogToConsole then
-    LogToConsole("`9[Boren Soil Loader] `0Menghubungkan dan memuat Auto Soil Builder...")
+local function logMsg(msg)
+    if LogToConsole then pcall(LogToConsole, "`e[Build Soil] `0" .. tostring(msg)) end
 end
-notifyUser("Memuat Auto Soil Builder...")
 
-local content, err = nil, nil
+logMsg("Menghubungkan ke GitHub dan memuat auto_soil_builder.lua...")
+notifyUser("Memuat BOREN STORE - AUTO BUILD SOIL FARM PRO...")
+
+local content = nil
 if fetch then
-    local okFetch, res, fetchErr = pcall(fetch, fetchUrl)
-    if okFetch and res and type(res) == "string" and res ~= "" and not res:match("^404") and (res:find("AUTO SOIL") or res:find("Boren Store")) then
+    local okFetch, res = pcall(fetch, fetchUrl)
+    if okFetch and type(res) == "string" and res ~= "" and not res:match("^404") and not res:match("^<!DOCTYPE") then
         content = res
-    else
-        err = fetchErr or "Respons invalid atau kosong"
     end
 end
 
--- Fallback jika koneksi offline atau fetch tidak tersedia di versi GL tertentu
 if not content or content == "" then
-    if LogToConsole then
-        LogToConsole("`e[Boren Soil Loader] `0Fetch online dilewati / offline. Memuat file lokal...")
-    end
-    local candidatePaths = {
+    local localCandidates = {
         "/storage/emulated/0/Android/media/launcher.powerkuy.growlauncher/ScriptLua/auto_soil_builder.lua",
-        "/storage/emulated/0/Android/media/launcher.powerkuy.growlauncher/ScriptLua/script code/auto_soil_builder.lua",
         "/storage/emulated/0/Android/data/launcher.powerkuy.growlauncher/files/ScriptLua/auto_soil_builder.lua",
         "/storage/emulated/0/Download/auto_soil_builder.lua",
-        "script/script code/auto_soil_builder.lua",
-        "auto_soil_builder.lua"
+        "script/auto_soil_builder.lua",
+        "auto_soil_builder.lua",
     }
-    for _, p in ipairs(candidatePaths) do
+    for _, p in ipairs(localCandidates) do
         local okF, fh = pcall(io.open, p, "r")
         if okF and fh then
             local text = fh:read("*a")
             fh:close()
             if text and text ~= "" then
                 content = text
-                if LogToConsole then
-                    LogToConsole("`2[Boren Soil Loader] `0File lokal berhasil dimuat dari: " .. p)
-                end
+                logMsg("Memuat skrip dari file lokal: " .. p)
                 break
             end
         end
     end
 end
 
-if content and content ~= "" then
-    local loaderFn = loadstring or load
-    local chunk, loadErr = loaderFn(content)
-    if chunk then
-        local okExec, runErr = pcall(chunk)
-        if okExec then
-            if LogToConsole then
-                LogToConsole("`2[Boren Soil Loader] `0Auto Soil Builder berhasil dijalankan!")
-            end
-            notifyUser("Auto Soil Builder Siap Digunakan!")
-        else
-            local errMsg = "Error runtime: " .. tostring(runErr)
-            if LogToConsole then LogToConsole("`4[Boren Soil Loader] `0" .. errMsg) end
-            notifyUser(errMsg)
-        end
-    else
-        local errMsg = "Error kompilasi script: " .. tostring(loadErr)
-        if LogToConsole then LogToConsole("`4[Boren Soil Loader] `0" .. errMsg) end
-        notifyUser(errMsg)
-    end
-else
-    local errMsg = "Gagal memuat auto_soil_builder.lua (koneksi offline dan file lokal tidak ditemukan)."
-    if LogToConsole then LogToConsole("`4[Boren Soil Loader] `0" .. errMsg) end
-    notifyUser(errMsg)
+if not content or content == "" then
+    logMsg("`4Gagal memuat auto_soil_builder.lua! Periksa koneksi internet / file lokal.")
+    notifyUser("Gagal load skrip!")
+    return
 end
+
+local loaderFn = loadstring or load
+local chunk, err = loaderFn(content)
+if not chunk then
+    logMsg("`4Error kompilasi script: " .. tostring(err))
+    notifyUser("Syntax error!")
+    return
+end
+
+logMsg("`2BOREN STORE - AUTO BUILD SOIL FARM PRO berhasil dimuat!")
+notifyUser("Build Soil Siap Digunakan!")
+chunk()
