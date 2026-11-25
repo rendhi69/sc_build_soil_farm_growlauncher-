@@ -2878,9 +2878,12 @@ local function stopSoilBot()
     updatePowerStatusList()
 end
 
+
 -- ============================================================================
--- 16. DIALOG KELOLA MULTI-WORLD STORAGE (Poin 1, 2, 3)
+-- 16. REFINED MODULAR COMPACT DIALOG SYSTEM FOR SOIL BUILDER (/sb /soil /boren)
+-- 100% Pure ASCII, 5-8 lines max per dialog, no vertical scrollbar
 -- ============================================================================
+
 local function parseWorldBatchFromString(rawInput)
     local list = {}
     if not rawInput or rawInput == "" then return list end
@@ -2893,436 +2896,1673 @@ local function parseWorldBatchFromString(rawInput)
     return list
 end
 
--- A. Dialog Manager 1: World Put (Farm Worlds)
-openUnifiedWorldManager = function(fmt)
-    fmt = fmt or "colon"
-    local copyLines = {}
-    for _, w in ipairs(CFG.farm_world_list) do
-        local d = (w.door and w.door ~= "") and w.door or ""
-        if fmt == "colon" then
-            table.insert(copyLines, d ~= "" and (w.name .. ":" .. d) or w.name)
-        elseif fmt == "pipe" then
-            table.insert(copyLines, d ~= "" and (w.name .. "|" .. d) or w.name)
-        else
-            table.insert(copyLines, w.name)
-        end
-    end
-    local rawBoxText = table.concat(copyLines, ", ")
-
-    local d = {
-        "set_default_color|`o",
-        "add_quick_exit|",
-        string.format("add_label_with_icon|big|`2Kelola Antrean World Put (%d)``|left|1436|", #CFG.farm_world_list),
-        "add_textbox|`oSalin antrean, tempel banyak world sekaligus, dan edit/hapus antrean.|left|",
-        "add_spacer|small|",
-        "add_textbox|`2[1. Salin Antrean World Put]|left|",
-        string.format("add_text_input|boren_wcopy_box|Salin Antrean|%s|9999|", rawBoxText),
-        "add_button|boren_btn_wfmt_colon|Format Titik Dua (:)|noflags|0|0|",
-        "add_button|boren_btn_wfmt_pipe|Format Garis (|)|noflags|0|0|",
-        "add_button|boren_btn_wfmt_name|Hanya Nama World|noflags|0|0|",
-        "add_spacer|small|",
-        "add_textbox|`2[2. Tempel / Tambah World ke Antrean]|left|",
-        "add_textbox|`eFormat: WORLD:DOOR atau WORLD|DOOR atau WORLD. Bebas koma/enter.|left|",
-        "add_text_input|boren_wpaste_raw|Tempel World di sini:||9999|",
-        "add_checkbox|boren_wpaste_replace|Ganti seluruh daftar (Replace)|0|",
-        "add_button|boren_submit_wpaste|`2+ Tempel / Tambah ke Antrean|noflags|0|0|",
-        "add_spacer|small|",
-        string.format("add_textbox|`2[3. Daftar Antrean Saat Ini (%d World)]|left|", #CFG.farm_world_list)
-    }
-
-    if #CFG.farm_world_list == 0 then
-        table.insert(d, "add_textbox|`4(Antrean World Put masih kosong. Silakan tempel di atas!)|left|")
-    else
-        for i, e in ipairs(CFG.farm_world_list) do
-            local st = (e.done or e.status == "DONE") and "`2[DONE]" or ((e.status == "PROSES") and "`6[PROSES]" or "`9[ANTRI]")
-            local doorStr = (e.door and e.door ~= "") and e.door or "-"
-            table.insert(d, string.format("add_textbox|`w%d. `9%s `o[Door: %s] %s|left|", i, e.name, doorStr, st))
-            table.insert(d, string.format("add_button|boren_wedit_%d|Edit|noflags|0|0|", i))
-            table.insert(d, string.format("add_button|boren_whapus_%d|Hapus|noflags|0|0|", i))
-            table.insert(d, "add_spacer|small|")
-        end
-    end
-
-    table.insert(d, "end_dialog|boren_soil_world_mgr|Tutup||")
-    return safeSendRawDialog(table.concat(d, "\n"))
+local function showClientDialog(dText)
+    return safeSendRawDialog(dText)
 end
 
-openEditWorldEntryDialog = function(idx)
-    local entry = CFG.farm_world_list[idx]
-    if not entry then return end
-    local d = {
+local DLG = {
+    wlist_page = 1,
+    tool_page  = 1,
+    block_page = 1,
+}
+
+-- ============================================================================
+-- 0. MAIN DASHBOARD DIALOG (/sb /soil)
+-- ============================================================================
+DLG.showSoilMainDialog = function()
+    local curW = getWorldNameSafe()
+    if curW == "" then curW = "EXIT" end
+    local isRun = STATE.running
+    local stBadge = isRun and "`2(Running)" or "`4(Stopped)"
+    local wCount = #(CFG.farm_world_list or {})
+    local toolCount = #(CFG.storage_tool_list or {})
+    local blockCount = #(CFG.storage_block_list or {})
+    local doneCount = 0
+    for _, w in ipairs(CFG.farm_world_list or {}) do
+        if w.done or w.status == "DONE" then doneCount = doneCount + 1 end
+    end
+    local modeBadge = (CFG.world_mode == "random") and "`b(Find Random)" or "`2(Manual)"
+    local putModeBadge = (CFG.put_mode == "3zigzag") and "`2(3-Zigzag)" or "`e(1by1)"
+
+    local lines = {
+        "set_default_color|`o",
+        "add_quick_exit|",
+        "add_label_with_icon|big|`wBoren Auto Soil Builder``|left|8772|",
+        "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        string.format("add_textbox|`wStatus: %s `p- `wWorld: `b%s `p- `wPut: %s|left|", stBadge, curW, putModeBadge),
+        string.format("add_textbox|`wQueue: `2(%d World) `p- `wDone: `2(%d) `p- `wMode: %s|left|", wCount, doneCount, modeBadge),
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_spacer|small|",
+    }
+    if not isRun then
+        lines[#lines+1] = "add_button|sb_btn_dlg_start|`wStart Auto Soil `2(Ready)|noflags|0|0|"
+    else
+        lines[#lines+1] = "add_button|sb_btn_dlg_stop|`wStop Auto Soil `4(Active)|noflags|0|0|"
+    end
+    lines[#lines+1] = string.format("add_button|sb_btn_dlg_add_cur|`wAdd World `2(%s)|noflags|0|0|", curW)
+    lines[#lines+1] = "add_spacer|small|"
+    lines[#lines+1] = string.format("add_button|sb_btn_dlg_worlds|`wSetting World Put `2(%d World)|noflags|0|0|", wCount)
+    lines[#lines+1] = string.format("add_button|sb_btn_dlg_storage|`wSetting Multi-Gudang `2(%d Alat, %d Block)|noflags|0|0|", toolCount, blockCount)
+    lines[#lines+1] = "add_button|sb_btn_dlg_lock|`wLock & Door Config|noflags|0|0|"
+    lines[#lines+1] = "add_button|sb_btn_dlg_settings|`wPengaturan Soil Farm|noflags|0|0|"
+    lines[#lines+1] = "add_button|sb_btn_dlg_logs|`wLog Activity & Tas|noflags|0|0|"
+    lines[#lines+1] = "add_spacer|small|"
+    lines[#lines+1] = "add_button|sb_btn_dlg_close|`wClose|noflags|0|0|"
+    lines[#lines+1] = "end_dialog|sb_main|Close||"
+    showClientDialog(table.concat(lines, "\n"))
+end
+
+-- ============================================================================
+-- 1. SETTING WORLD PUT (HUB + SUB-DIALOGS)
+-- ============================================================================
+DLG.showSoilWorldsDialog = function()
+    local wCount = #(CFG.farm_world_list or {})
+    local isRandom = (CFG.world_mode == "random")
+    local modeTxt = isRandom and "`b(Find Random World)" or "`2(Manual Queue)"
+    local rLen = tonumber(CFG.random_length) or 6
+
+    local lines = {
+        "set_default_color|`o",
+        "add_quick_exit|",
+        "add_label_with_icon|big|`wSetting World Put``|left|2|",
+        "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        string.format("add_textbox|`wTotal Queue: `2(%d World) `p- `wMode: %s|left|", wCount, modeTxt),
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_spacer|small|",
+        string.format("add_button|sb_btn_toggle_mode|`wMode: %s `2(Switch)|noflags|0|0|", modeTxt),
+        "add_button|sb_btn_open_add_w|`w1. Add World Put `2(Manual)|noflags|0|0|",
+        string.format("add_button|sb_btn_open_find_w|`w2. Find Random World `2(%d Huruf)|noflags|0|0|", rLen),
+        "add_button|sb_btn_open_batch_w|`w3. Batch Add World `2(Paste)|noflags|0|0|",
+        string.format("add_button|sb_btn_open_list_w|`w4. List World Put `2(%d World)|noflags|0|0|", wCount),
+        "add_button|sb_btn_open_file_w|`w5. Backup & File Manager|noflags|0|0|",
+        "add_button|sb_btn_dlg_reset_queue|`wReset Status Queue `4(Reset)|noflags|0|0|",
+        "add_spacer|small|",
+        "add_button|sb_btn_dlg_back_main|`wBack|noflags|0|0|",
+        "end_dialog|sb_worlds|Close||"
+    }
+    showClientDialog(table.concat(lines, "\n"))
+end
+
+-- 1.1 Add Single World
+DLG.showSoilAddWorldDialog = function()
+    local curW = getWorldNameSafe()
+    if curW == "" then curW = "EXIT" end
+    local lines = {
+        "set_default_color|`o",
+        "add_quick_exit|",
+        "add_label_with_icon|big|`wAdd World Put``|left|2|",
+        "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_textbox|`wMasukkan nama world farm ke antrian: `2(Queue)|left|",
+        "add_textbox|`p(Format: WORLD atau WORLD:DOOR_ID)|left|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_spacer|small|",
+        "add_text_input|sb_in_world_name|World Name||32|",
+        "add_text_input|sb_in_door_id|Door ID (Opsional)||16|",
+        "add_spacer|small|",
+        "add_button|sb_btn_do_add_world|`wSave World `2(Add)|noflags|0|0|",
+        string.format("add_button|sb_btn_add_cur_w|`wAdd Current World `2(%s)|noflags|0|0|", curW),
+        "add_button|sb_btn_back_worlds|`wBack|noflags|0|0|",
+        "end_dialog|sb_add_w|Cancel||"
+    }
+    showClientDialog(table.concat(lines, "\n"))
+end
+
+-- 1.2 Find Random World
+DLG.showSoilFindWorldDialog = function()
+    local isRandom = (CFG.world_mode == "random")
+    local modeBadge = isRandom and "`2(ON / Active)" or "`4(OFF / Manual)"
+    local rLen = tonumber(CFG.random_length) or 6
+    local rNum = CFG.random_use_numbers and 1 or 0
+    local rTar = tonumber(CFG.random_target_count) or 5
+    local autoBlast = CFG.auto_use_blast and 1 or 0
+    local blastId = tonumber(CFG.blast_item_id) or 3562
+
+    local lines = {
+        "set_default_color|`o",
+        "add_quick_exit|",
+        "add_label_with_icon|big|`wFind Random World``|left|2|",
+        "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        string.format("add_textbox|`wStatus: %s `p- `wTarget: `2(%d World Selesai)|left|", modeBadge, rTar),
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_spacer|small|",
+        string.format("add_button|sb_btn_find_toggle_mode|`wMode: %s `2(Switch)|noflags|0|0|", modeBadge),
+        string.format("add_text_input|sb_in_find_len|Panjang Huruf (3-16)|%d|4|", rLen),
+        string.format("add_text_input|sb_in_find_target|Target World Selesai|%d|4|", rTar),
+        string.format("add_checkbox|sb_chk_find_num|Gunakan Kombinasi Angka (0-9)|%d|", rNum),
+        string.format("add_checkbox|sb_chk_auto_blast|Gunakan Blast Otomatis|%d|", autoBlast),
+        string.format("add_text_input|sb_in_blast_id|ID Item Blast (Cave=3562 / Thermo=1402)|%d|8|", blastId),
+        "add_spacer|small|",
+        "add_button|sb_btn_generate_1_world|`wGenerate 1 World ke Queue `2(Add)|noflags|0|0|",
+        "add_button|sb_btn_save_find_cfg|`wSave Find Config `2(Save)|noflags|0|0|",
+        "add_button|sb_btn_back_worlds|`wBack|noflags|0|0|",
+        "end_dialog|sb_find_w|Cancel||"
+    }
+    showClientDialog(table.concat(lines, "\n"))
+end
+
+-- 1.3 Batch Add World
+DLG.showSoilBatchWorldDialog = function()
+    local lines = {
+        "set_default_color|`o",
+        "add_quick_exit|",
+        "add_label_with_icon|big|`wBatch Add World Put``|left|2|",
+        "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_textbox|`wMasukkan daftar world farm dipisah spasi, koma atau enter:|left|",
+        "add_textbox|`p(Contoh: FARM1 FARM2:DOOR1 FARM3|DOOR2 FARM4)|left|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_spacer|small|",
+        "add_text_input|sb_in_batch_worlds|World List||80|",
+        "add_checkbox|sb_chk_batch_replace|Ganti seluruh daftar (Replace)|0|",
+        "add_spacer|small|",
+        "add_button|sb_btn_do_batch_add|`wAdd All Worlds `2(Batch)|noflags|0|0|",
+        "add_button|sb_btn_back_worlds|`wBack|noflags|0|0|",
+        "end_dialog|sb_batch_w|Cancel||"
+    }
+    showClientDialog(table.concat(lines, "\n"))
+end
+
+-- 1.4 List World Put (Paginated, 5 items per page)
+DLG.showSoilWorldListDialog = function(page)
+    local list = CFG.farm_world_list or {}
+    local count = #list
+    local perPage = 5
+    local totalPages = math.max(1, math.ceil(count / perPage))
+    page = math.max(1, math.min(totalPages, tonumber(page) or 1))
+    DLG.wlist_page = page
+
+    local lines = {
+        "set_default_color|`o",
+        "add_quick_exit|",
+        "add_label_with_icon|big|`wList World Put``|left|2|",
+        "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        string.format("add_textbox|`wTotal Registered: `2(%d World) `p- `wPage `2(%d/%d)|left|", count, page, totalPages),
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_spacer|small|",
+    }
+
+    if count == 0 then
+        lines[#lines+1] = "add_textbox|`4(Antrian world masih kosong. Silakan tambah world)|left|"
+    else
+        local startIdx = (page - 1) * perPage + 1
+        local endIdx = math.min(count, startIdx + perPage - 1)
+        for i = startIdx, endIdx do
+            local item = list[i]
+            local dName = (item.door and item.door ~= "") and item.door or "-"
+            local st = (item.done or item.status == "DONE") and "`2[DONE]" or ((item.status == "PROSES") and "`6[PROSES]" or "`9[ANTRI]")
+            lines[#lines+1] = string.format("add_textbox|`w#%d `b%s `p[Door: `e%s`p] %s|left|", i, item.name, dName, st)
+            lines[#lines+1] = string.format("add_button|sb_btn_w_edit_%d|`wEdit `2(#%d)|noflags|0|0|", i, i)
+            lines[#lines+1] = string.format("add_button|sb_btn_w_del_%d|`wDelete `4(#%d)|noflags|0|0|", i, i)
+            lines[#lines+1] = "add_spacer|small|"
+        end
+    end
+
+    lines[#lines+1] = "add_spacer|small|"
+    if page > 1 then
+        lines[#lines+1] = string.format("add_button|sb_btn_w_prev_%d|`w<< Prev Page `2(%d)|noflags|0|0|", page - 1, page - 1)
+    end
+    if page < totalPages then
+        lines[#lines+1] = string.format("add_button|sb_btn_w_next_%d|`wNext Page >> `2(%d)|noflags|0|0|", page + 1, page + 1)
+    end
+    lines[#lines+1] = "add_button|sb_btn_clear_all_worlds|`wClear All Worlds `4(Delete All)|noflags|0|0|"
+    lines[#lines+1] = "add_button|sb_btn_back_worlds|`wBack|noflags|0|0|"
+    lines[#lines+1] = "end_dialog|sb_list_w|Close||"
+    showClientDialog(table.concat(lines, "\n"))
+end
+
+-- 1.5 Edit World Put Entry
+DLG.showSoilWorldEditDialog = function(idx)
+    idx = tonumber(idx) or 1
+    local entry = (CFG.farm_world_list or {})[idx]
+    if not entry then return DLG.showSoilWorldListDialog(1) end
+
+    local lines = {
         "set_default_color|`o",
         "add_quick_exit|",
         string.format("add_label_with_icon|big|`wEdit World Put #%d: %s``|left|2|", idx, entry.name),
         "add_spacer|small|",
-        string.format("add_text_input|edit_w_name|Nama World:|%s|32|", entry.name),
-        string.format("add_text_input|edit_w_door|Door ID:|%s|32|", entry.door or ""),
-        string.format("add_checkbox|edit_w_done|Sudah Selesai (DONE)|%s|", entry.done and "1" or "0"),
+        "add_textbox|`p------------------------------------------------------------|left|",
+        string.format("add_text_input|sb_edit_w_name|World Name|%s|32|", entry.name or ""),
+        string.format("add_text_input|sb_edit_w_door|Door ID (Opsional)|%s|16|", entry.door or ""),
+        string.format("add_checkbox|sb_edit_w_done|Sudah Selesai (DONE)|%d|", (entry.done or entry.status == "DONE") and 1 or 0),
+        "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|",
-        "add_button|save_w_edit|`2Simpan Perubahan|noflags|0|0|",
-        "add_button|del_w_edit|`4Hapus World Ini|noflags|0|0|",
-        string.format("end_dialog|boren_soil_world_edit_%d|Batal||", idx),
+        string.format("add_button|sb_btn_save_w_edit_%d|`wSave Changes `2(Save)|noflags|0|0|", idx),
+        string.format("add_button|sb_btn_del_w_edit_%d|`wDelete World `4(Del)|noflags|0|0|", idx),
+        "add_button|sb_btn_back_w_list|`wBack|noflags|0|0|",
+        string.format("end_dialog|sb_edit_w_%d|Cancel||", idx)
     }
-    safeSendRawDialog(table.concat(d, "\n"))
+    showClientDialog(table.concat(lines, "\n"))
 end
 
--- B. Dialog Manager 2: Gudang Alat (WL, SL, Jammer, Door, Blocker, Blast)
-openUnifiedToolManager = function(fmt)
-    fmt = fmt or "colon"
-    local copyLines = {}
-    for _, s in ipairs(CFG.storage_tool_list) do
-        local d = (s.door and s.door ~= "") and s.door or ""
-        if fmt == "colon" then
-            table.insert(copyLines, d ~= "" and (s.name .. ":" .. d) or s.name)
-        elseif fmt == "pipe" then
-            table.insert(copyLines, d ~= "" and (s.name .. "|" .. d) or s.name)
-        else
-            table.insert(copyLines, s.name)
-        end
-    end
-    local rawBoxText = table.concat(copyLines, ", ")
-
-    local d = {
+-- 1.6 File & Backup Manager
+DLG.showSoilFileWorldDialog = function()
+    local fName = CFG.world_file_name or "boren_soil_worlds.txt"
+    local lines = {
         "set_default_color|`o",
         "add_quick_exit|",
-        string.format("add_label_with_icon|big|`2Kelola Gudang Alat (%d)``|left|242|", #CFG.storage_tool_list),
-        "add_textbox|`oGudang restock World Lock, Small Lock, Jammer, Wooden Door, dan Blast.|left|",
+        "add_label_with_icon|big|`wBackup & File Manager``|left|2|",
         "add_spacer|small|",
-        "add_textbox|`2[1. Salin Daftar Gudang Alat]|left|",
-        string.format("add_text_input|boren_tlcopy_box|Salin Gudang Alat|%s|9999|", rawBoxText),
-        "add_button|boren_btn_tlfmt_colon|Format Titik Dua (:)|noflags|0|0|",
-        "add_button|boren_btn_tlfmt_pipe|Format Garis (|)|noflags|0|0|",
-        "add_button|boren_btn_tlfmt_name|Hanya Nama World|noflags|0|0|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_textbox|`wSimpan atau muat antrean world dari file storage lokal:|left|",
+        "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|",
-        "add_textbox|`2[2. Tempel / Tambah Gudang Alat]|left|",
-        "add_textbox|`eFormat: WORLD:DOOR atau WORLD|DOOR atau WORLD. Bebas koma/enter.|left|",
-        "add_text_input|boren_tlpaste_raw|Tempel Gudang di sini:||9999|",
-        "add_checkbox|boren_tlpaste_replace|Ganti seluruh daftar (Replace)|0|",
-        "add_button|boren_submit_tlpaste|`2+ Tempel / Tambah ke Gudang Alat|noflags|0|0|",
+        string.format("add_text_input|sb_in_file_name|Nama File|%s|40|", fName),
         "add_spacer|small|",
-        string.format("add_textbox|`2[3. Daftar Gudang Alat Saat Ini (%d World)]|left|", #CFG.storage_tool_list)
+        "add_button|sb_btn_do_save_file|`wSave Queue ke File `2(Save)|noflags|0|0|",
+        "add_button|sb_btn_do_load_file|`wLoad Queue dari File `2(Load)|noflags|0|0|",
+        "add_button|sb_btn_back_worlds|`wBack|noflags|0|0|",
+        "end_dialog|sb_file_w|Cancel||"
+    }
+    showClientDialog(table.concat(lines, "\n"))
+end
+
+-- ============================================================================
+-- 2. SETTING MULTI-GUDANG (STORAGE HUB + SUB-DIALOGS)
+-- ============================================================================
+DLG.showSoilStorageDialog = function()
+    local toolCount = #(CFG.storage_tool_list or {})
+    local blockCount = #(CFG.storage_block_list or {})
+    local bId = tonumber(CFG.block_id) or 8772
+    local bName = resolveItemName(bId)
+
+    local lines = {
+        "set_default_color|`o",
+        "add_quick_exit|",
+        "add_label_with_icon|big|`wSetting Multi-Gudang``|left|3802|",
+        "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        string.format("add_textbox|`wGudang Alat: `2(%d World) `p- `wGudang Block: `2(%d World)|left|", toolCount, blockCount),
+        string.format("add_textbox|`wBlock Target: `b%s `o(#%d)|left|", bName, bId),
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_spacer|small|",
+        "add_button|sb_btn_open_tool_store|`w1. Gudang Alat (WL, SL, Jammer, Door, Blast)|noflags|0|0|",
+        string.format("add_button|sb_btn_open_tool_list|`w2. List Gudang Alat `2(%d World)|noflags|0|0|", toolCount),
+        "add_button|sb_btn_open_block_store|`w3. Gudang Block & Water Elevator|noflags|0|0|",
+        string.format("add_button|sb_btn_open_block_list|`w4. List Gudang Block `2(%d World)|noflags|0|0|", blockCount),
+        "add_button|sb_btn_open_block_cfg|`w5. Pengaturan Bahan Block & Water|noflags|0|0|",
+        "add_spacer|small|",
+        "add_button|sb_btn_dlg_back_main|`wBack|noflags|0|0|",
+        "end_dialog|sb_storage|Close||"
+    }
+    showClientDialog(table.concat(lines, "\n"))
+end
+
+-- 2.1 Gudang Alat
+DLG.showSoilToolStorageDialog = function()
+    local curW = getWorldNameSafe()
+    if curW == "" then curW = "EXIT" end
+    local count = #(CFG.storage_tool_list or {})
+
+    local lines = {
+        "set_default_color|`o",
+        "add_quick_exit|",
+        "add_label_with_icon|big|`wGudang Alat (WL/SL/Jammer/Door)``|left|242|",
+        "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        string.format("add_textbox|`wTambah world gudang alat restock: `2(%d World)|left|", count),
+        "add_textbox|`p(Format: WORLD atau WORLD:DOOR_ID)|left|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_spacer|small|",
+        "add_text_input|sb_in_tool_name|World Name||32|",
+        "add_text_input|sb_in_tool_door|Door ID (Opsional)||16|",
+        "add_spacer|small|",
+        "add_button|sb_btn_do_add_tool|`wSave Gudang `2(Add)|noflags|0|0|",
+        string.format("add_button|sb_btn_add_cur_tool|`wAdd Current World `2(%s)|noflags|0|0|", curW),
+        "add_button|sb_btn_open_tool_batch|`wBatch Add Gudang Alat `2(Paste)|noflags|0|0|",
+        string.format("add_button|sb_btn_open_tool_list|`wList Gudang Alat `2(%d World)|noflags|0|0|", count),
+        "add_button|sb_btn_back_storage|`wBack|noflags|0|0|",
+        "end_dialog|sb_tool_storage|Cancel||"
+    }
+    showClientDialog(table.concat(lines, "\n"))
+end
+
+-- 2.2 Batch Add Gudang Alat
+DLG.showSoilToolBatchDialog = function()
+    local lines = {
+        "set_default_color|`o",
+        "add_quick_exit|",
+        "add_label_with_icon|big|`wBatch Add Gudang Alat``|left|242|",
+        "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_textbox|`wMasukkan daftar gudang alat dipisah spasi, koma atau enter:|left|",
+        "add_textbox|`p(Format: GUDANG1 GUDANG2:DOOR1 GUDANG3|DOOR2)|left|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_spacer|small|",
+        "add_text_input|sb_in_batch_tools|Gudang List||80|",
+        "add_checkbox|sb_chk_batch_tool_replace|Ganti seluruh daftar (Replace)|0|",
+        "add_spacer|small|",
+        "add_button|sb_btn_do_batch_tool_add|`wAdd All Gudang `2(Batch)|noflags|0|0|",
+        "add_button|sb_btn_back_tool_store|`wBack|noflags|0|0|",
+        "end_dialog|sb_batch_tool|Cancel||"
+    }
+    showClientDialog(table.concat(lines, "\n"))
+end
+
+-- 2.3 List Gudang Alat
+DLG.showSoilToolListDialog = function(page)
+    local list = CFG.storage_tool_list or {}
+    local count = #list
+    local perPage = 5
+    local totalPages = math.max(1, math.ceil(count / perPage))
+    page = math.max(1, math.min(totalPages, tonumber(page) or 1))
+    DLG.tool_page = page
+
+    local lines = {
+        "set_default_color|`o",
+        "add_quick_exit|",
+        "add_label_with_icon|big|`wList Gudang Alat``|left|242|",
+        "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        string.format("add_textbox|`wTotal Registered: `2(%d World) `p- `wPage `2(%d/%d)|left|", count, page, totalPages),
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_spacer|small|",
     }
 
-    if #CFG.storage_tool_list == 0 then
-        table.insert(d, "add_textbox|`4(Gudang Alat masih kosong. Silakan tempel di atas!)|left|")
+    if count == 0 then
+        lines[#lines+1] = "add_textbox|`4(Gudang alat masih kosong. Silakan tambah gudang)|left|"
     else
-        for i, e in ipairs(CFG.storage_tool_list) do
-            local doorStr = (e.door and e.door ~= "") and e.door or "-"
-            table.insert(d, string.format("add_textbox|`w%d. `9%s `o[Door: %s]|left|", i, e.name, doorStr))
-            table.insert(d, string.format("add_button|boren_tledit_%d|Edit|noflags|0|0|", i))
-            table.insert(d, string.format("add_button|boren_tlhapus_%d|Hapus|noflags|0|0|", i))
-            table.insert(d, "add_spacer|small|")
+        local startIdx = (page - 1) * perPage + 1
+        local endIdx = math.min(count, startIdx + perPage - 1)
+        for i = startIdx, endIdx do
+            local item = list[i]
+            local dName = (item.door and item.door ~= "") and item.door or "-"
+            lines[#lines+1] = string.format("add_textbox|`w#%d `b%s `p[Door: `e%s`p]|left|", i, item.name, dName)
+            lines[#lines+1] = string.format("add_button|sb_btn_tool_edit_%d|`wEdit `2(#%d)|noflags|0|0|", i, i)
+            lines[#lines+1] = string.format("add_button|sb_btn_tool_del_%d|`wDelete `4(#%d)|noflags|0|0|", i, i)
+            lines[#lines+1] = "add_spacer|small|"
         end
     end
 
-    table.insert(d, "end_dialog|boren_soil_tool_mgr|Tutup||")
-    return safeSendRawDialog(table.concat(d, "\n"))
+    lines[#lines+1] = "add_spacer|small|"
+    if page > 1 then
+        lines[#lines+1] = string.format("add_button|sb_btn_tool_prev_%d|`w<< Prev Page `2(%d)|noflags|0|0|", page - 1, page - 1)
+    end
+    if page < totalPages then
+        lines[#lines+1] = string.format("add_button|sb_btn_tool_next_%d|`wNext Page >> `2(%d)|noflags|0|0|", page + 1, page + 1)
+    end
+    lines[#lines+1] = "add_button|sb_btn_clear_all_tools|`wClear All Tools `4(Delete All)|noflags|0|0|"
+    lines[#lines+1] = "add_button|sb_btn_back_storage|`wBack|noflags|0|0|"
+    lines[#lines+1] = "end_dialog|sb_tool_list|Close||"
+    showClientDialog(table.concat(lines, "\n"))
 end
 
-openEditToolEntryDialog = function(idx)
-    local entry = CFG.storage_tool_list[idx]
-    if not entry then return end
-    local d = {
+-- 2.4 Edit Gudang Alat Entry
+DLG.showSoilToolEditDialog = function(idx)
+    idx = tonumber(idx) or 1
+    local entry = (CFG.storage_tool_list or {})[idx]
+    if not entry then return DLG.showSoilToolListDialog(1) end
+
+    local lines = {
         "set_default_color|`o",
         "add_quick_exit|",
         string.format("add_label_with_icon|big|`wEdit Gudang Alat #%d: %s``|left|242|", idx, entry.name),
         "add_spacer|small|",
-        string.format("add_text_input|edit_tl_name|Nama World:|%s|32|", entry.name),
-        string.format("add_text_input|edit_tl_door|Door ID:|%s|32|", entry.door or ""),
+        "add_textbox|`p------------------------------------------------------------|left|",
+        string.format("add_text_input|sb_edit_tool_name|World Name|%s|32|", entry.name or ""),
+        string.format("add_text_input|sb_edit_tool_door|Door ID (Opsional)|%s|16|", entry.door or ""),
+        "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|",
-        "add_button|save_tl_edit|`2Simpan Perubahan|noflags|0|0|",
-        "add_button|del_tl_edit|`4Hapus Gudang Ini|noflags|0|0|",
-        string.format("end_dialog|boren_soil_tool_edit_%d|Batal||", idx),
+        string.format("add_button|sb_btn_save_tool_edit_%d|`wSave Changes `2(Save)|noflags|0|0|", idx),
+        string.format("add_button|sb_btn_del_tool_edit_%d|`wDelete World `4(Del)|noflags|0|0|", idx),
+        "add_button|sb_btn_back_tool_list|`wBack|noflags|0|0|",
+        string.format("end_dialog|sb_edit_tool_%d|Cancel||", idx)
     }
-    safeSendRawDialog(table.concat(d, "\n"))
+    showClientDialog(table.concat(lines, "\n"))
 end
 
--- C. Dialog Manager 3: Gudang Block & Water (Block Put & Water Elevator)
-openUnifiedBlockManager = function(fmt)
-    fmt = fmt or "colon"
-    local copyLines = {}
-    for _, s in ipairs(CFG.storage_block_list) do
-        local d = (s.door and s.door ~= "") and s.door or ""
-        if fmt == "colon" then
-            table.insert(copyLines, d ~= "" and (s.name .. ":" .. d) or s.name)
-        elseif fmt == "pipe" then
-            table.insert(copyLines, d ~= "" and (s.name .. "|" .. d) or s.name)
-        else
-            table.insert(copyLines, s.name)
-        end
-    end
-    local rawBoxText = table.concat(copyLines, ", ")
+-- 2.5 Gudang Block & Water
+DLG.showSoilBlockStorageDialog = function()
+    local curW = getWorldNameSafe()
+    if curW == "" then curW = "EXIT" end
+    local count = #(CFG.storage_block_list or {})
 
-    local d = {
+    local lines = {
         "set_default_color|`o",
         "add_quick_exit|",
-        string.format("add_label_with_icon|big|`2Kelola Gudang Block & Water (%d)``|left|8772|", #CFG.storage_block_list),
-        string.format("add_textbox|`oGudang restock Block Soil (%s) dan Air (%s).|left|", resolveItemName(CFG.block_id), resolveItemName(CFG.water_item_id)),
+        "add_label_with_icon|big|`wGudang Block & Water``|left|8772|",
         "add_spacer|small|",
-        "add_textbox|`2[1. Salin Daftar Gudang Block]|left|",
-        string.format("add_text_input|boren_bkcopy_box|Salin Gudang Block|%s|9999|", rawBoxText),
-        "add_button|boren_btn_bkfmt_colon|Format Titik Dua (:)|noflags|0|0|",
-        "add_button|boren_btn_bkfmt_pipe|Format Garis (|)|noflags|0|0|",
-        "add_button|boren_btn_bkfmt_name|Hanya Nama World|noflags|0|0|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        string.format("add_textbox|`wTambah world gudang restock block: `2(%d World)|left|", count),
+        "add_textbox|`p(Format: WORLD atau WORLD:DOOR_ID)|left|",
+        "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|",
-        "add_textbox|`2[2. Tempel / Tambah Gudang Block]|left|",
-        "add_textbox|`eFormat: WORLD:DOOR atau WORLD|DOOR atau WORLD. Bebas koma/enter.|left|",
-        "add_text_input|boren_bkpaste_raw|Tempel Gudang di sini:||9999|",
-        "add_checkbox|boren_bkpaste_replace|Ganti seluruh daftar (Replace)|0|",
-        "add_button|boren_submit_bkpaste|`2+ Tempel / Tambah ke Gudang Block|noflags|0|0|",
+        "add_text_input|sb_in_block_name|World Name||32|",
+        "add_text_input|sb_in_block_door|Door ID (Opsional)||16|",
         "add_spacer|small|",
-        string.format("add_textbox|`2[3. Daftar Gudang Block Saat Ini (%d World)]|left|", #CFG.storage_block_list)
+        "add_button|sb_btn_do_add_block|`wSave Gudang `2(Add)|noflags|0|0|",
+        string.format("add_button|sb_btn_add_cur_block|`wAdd Current World `2(%s)|noflags|0|0|", curW),
+        "add_button|sb_btn_open_block_batch|`wBatch Add Gudang Block `2(Paste)|noflags|0|0|",
+        string.format("add_button|sb_btn_open_block_list|`wList Gudang Block `2(%d World)|noflags|0|0|", count),
+        "add_button|sb_btn_back_storage|`wBack|noflags|0|0|",
+        "end_dialog|sb_block_storage|Cancel||"
+    }
+    showClientDialog(table.concat(lines, "\n"))
+end
+
+-- 2.6 Batch Add Gudang Block
+DLG.showSoilBlockBatchDialog = function()
+    local lines = {
+        "set_default_color|`o",
+        "add_quick_exit|",
+        "add_label_with_icon|big|`wBatch Add Gudang Block``|left|8772|",
+        "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_textbox|`wMasukkan daftar gudang block dipisah spasi, koma atau enter:|left|",
+        "add_textbox|`p(Format: GUDANG1 GUDANG2:DOOR1 GUDANG3|DOOR2)|left|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_spacer|small|",
+        "add_text_input|sb_in_batch_blocks|Gudang List||80|",
+        "add_checkbox|sb_chk_batch_block_replace|Ganti seluruh daftar (Replace)|0|",
+        "add_spacer|small|",
+        "add_button|sb_btn_do_batch_block_add|`wAdd All Gudang `2(Batch)|noflags|0|0|",
+        "add_button|sb_btn_back_block_store|`wBack|noflags|0|0|",
+        "end_dialog|sb_batch_block|Cancel||"
+    }
+    showClientDialog(table.concat(lines, "\n"))
+end
+
+-- 2.7 List Gudang Block
+DLG.showSoilBlockListDialog = function(page)
+    local list = CFG.storage_block_list or {}
+    local count = #list
+    local perPage = 5
+    local totalPages = math.max(1, math.ceil(count / perPage))
+    page = math.max(1, math.min(totalPages, tonumber(page) or 1))
+    DLG.block_page = page
+
+    local lines = {
+        "set_default_color|`o",
+        "add_quick_exit|",
+        "add_label_with_icon|big|`wList Gudang Block & Water``|left|8772|",
+        "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        string.format("add_textbox|`wTotal Registered: `2(%d World) `p- `wPage `2(%d/%d)|left|", count, page, totalPages),
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_spacer|small|",
     }
 
-    if #CFG.storage_block_list == 0 then
-        table.insert(d, "add_textbox|`4(Gudang Block masih kosong. Silakan tempel di atas!)|left|")
+    if count == 0 then
+        lines[#lines+1] = "add_textbox|`4(Gudang block masih kosong. Silakan tambah gudang)|left|"
     else
-        for i, e in ipairs(CFG.storage_block_list) do
-            local doorStr = (e.door and e.door ~= "") and e.door or "-"
-            table.insert(d, string.format("add_textbox|`w%d. `9%s `o[Door: %s]|left|", i, e.name, doorStr))
-            table.insert(d, string.format("add_button|boren_bkedit_%d|Edit|noflags|0|0|", i))
-            table.insert(d, string.format("add_button|boren_bkhapus_%d|Hapus|noflags|0|0|", i))
-            table.insert(d, "add_spacer|small|")
+        local startIdx = (page - 1) * perPage + 1
+        local endIdx = math.min(count, startIdx + perPage - 1)
+        for i = startIdx, endIdx do
+            local item = list[i]
+            local dName = (item.door and item.door ~= "") and item.door or "-"
+            lines[#lines+1] = string.format("add_textbox|`w#%d `b%s `p[Door: `e%s`p]|left|", i, item.name, dName)
+            lines[#lines+1] = string.format("add_button|sb_btn_blk_edit_%d|`wEdit `2(#%d)|noflags|0|0|", i, i)
+            lines[#lines+1] = string.format("add_button|sb_btn_blk_del_%d|`wDelete `4(#%d)|noflags|0|0|", i, i)
+            lines[#lines+1] = "add_spacer|small|"
         end
     end
 
-    table.insert(d, "end_dialog|boren_soil_block_mgr|Tutup||")
-    return safeSendRawDialog(table.concat(d, "\n"))
+    lines[#lines+1] = "add_spacer|small|"
+    if page > 1 then
+        lines[#lines+1] = string.format("add_button|sb_btn_blk_prev_%d|`w<< Prev Page `2(%d)|noflags|0|0|", page - 1, page - 1)
+    end
+    if page < totalPages then
+        lines[#lines+1] = string.format("add_button|sb_btn_blk_next_%d|`wNext Page >> `2(%d)|noflags|0|0|", page + 1, page + 1)
+    end
+    lines[#lines+1] = "add_button|sb_btn_clear_all_blocks|`wClear All Blocks `4(Delete All)|noflags|0|0|"
+    lines[#lines+1] = "add_button|sb_btn_back_storage|`wBack|noflags|0|0|"
+    lines[#lines+1] = "end_dialog|sb_block_list|Close||"
+    showClientDialog(table.concat(lines, "\n"))
 end
 
-openEditBlockEntryDialog = function(idx)
-    local entry = CFG.storage_block_list[idx]
-    if not entry then return end
-    local d = {
+-- 2.8 Edit Gudang Block Entry
+DLG.showSoilBlockEditDialog = function(idx)
+    idx = tonumber(idx) or 1
+    local entry = (CFG.storage_block_list or {})[idx]
+    if not entry then return DLG.showSoilBlockListDialog(1) end
+
+    local lines = {
         "set_default_color|`o",
         "add_quick_exit|",
         string.format("add_label_with_icon|big|`wEdit Gudang Block #%d: %s``|left|8772|", idx, entry.name),
         "add_spacer|small|",
-        string.format("add_text_input|edit_bk_name|Nama World:|%s|32|", entry.name),
-        string.format("add_text_input|edit_bk_door|Door ID:|%s|32|", entry.door or ""),
+        "add_textbox|`p------------------------------------------------------------|left|",
+        string.format("add_text_input|sb_edit_blk_name|World Name|%s|32|", entry.name or ""),
+        string.format("add_text_input|sb_edit_blk_door|Door ID (Opsional)|%s|16|", entry.door or ""),
+        "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|",
-        "add_button|save_bk_edit|`2Simpan Perubahan|noflags|0|0|",
-        "add_button|del_bk_edit|`4Hapus Gudang Ini|noflags|0|0|",
-        string.format("end_dialog|boren_soil_block_edit_%d|Batal||", idx),
+        string.format("add_button|sb_btn_save_blk_edit_%d|`wSave Changes `2(Save)|noflags|0|0|", idx),
+        string.format("add_button|sb_btn_del_blk_edit_%d|`wDelete World `4(Del)|noflags|0|0|", idx),
+        "add_button|sb_btn_back_blk_list|`wBack|noflags|0|0|",
+        string.format("end_dialog|sb_edit_blk_%d|Cancel||", idx)
     }
-    safeSendRawDialog(table.concat(d, "\n"))
+    showClientDialog(table.concat(lines, "\n"))
+end
+
+-- 2.9 Pengaturan Bahan Block & Water Elevator
+DLG.showSoilBlockConfigDialog = function()
+    local bId = tonumber(CFG.block_id) or 8772
+    local bName = resolveItemName(bId)
+    local enableWater = CFG.enable_water and 1 or 0
+    local waterId = tonumber(CFG.water_item_id) or 822
+    local waterX = tonumber(CFG.water_x) or 0
+
+    local lines = {
+        "set_default_color|`o",
+        "add_quick_exit|",
+        "add_label_with_icon|big|`wPengaturan Bahan Block & Water``|left|8772|",
+        "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        string.format("add_textbox|`wBlock: `b%s `p- `wWater: `2(%s)|left|", bName, CFG.enable_water and "ON" or "OFF"),
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_spacer|small|",
+        string.format("add_text_input|sb_in_block_id|ID Block Diletakkan (Soil=8772)|%d|8|", bId),
+        string.format("add_checkbox|sb_chk_enable_water|Pasang Kolom Water Elevator|%d|", enableWater),
+        string.format("add_text_input|sb_in_water_id|ID Item Water (Water Bucket=822)|%d|8|", waterId),
+        string.format("add_text_input|sb_in_water_x|Kolom Water Elevator X (0-10)|%d|4|", waterX),
+        "add_spacer|small|",
+        "add_button|sb_btn_save_block_cfg|`wSave Config `2(Save)|noflags|0|0|",
+        "add_button|sb_btn_back_storage|`wBack|noflags|0|0|",
+        "end_dialog|sb_block_cfg|Cancel||"
+    }
+    showClientDialog(table.concat(lines, "\n"))
 end
 
 -- ============================================================================
--- 17. ON SEND PACKET DIALOG HOOK DISPATCHER
+-- 3. LOCK & DOOR CONFIG HUB + SUB-DIALOGS
 -- ============================================================================
-local function onSendPacketDialogHook(ptype, pkt)
-    if ptype ~= 2 or not pkt then return end
-    if not pkt:find("action|dialog_return", 1, true) then return end
+DLG.showSoilLockDialog = function()
+    local lines = {
+        "set_default_color|`o",
+        "add_quick_exit|",
+        "add_label_with_icon|big|`wLock & Door Config Hub``|left|242|",
+        "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_textbox|`wFormasi Kunci Pintu Entrance (WL, SL, Jammer, Door, Blocker)|left|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_spacer|small|",
+        "add_button|sb_btn_open_wl_cfg|`w1. Formasi World Lock (WL)|noflags|0|0|",
+        "add_button|sb_btn_open_sl_cfg|`w2. Formasi Small Lock (SL)|noflags|0|0|",
+        "add_button|sb_btn_open_door_cfg|`w3. Formasi Door Utama (ID Door)|noflags|0|0|",
+        "add_button|sb_btn_open_misc_lock|`w4. Jammer & Blocker (Air Vent)|noflags|0|0|",
+        "add_spacer|small|",
+        "add_button|sb_btn_dlg_back_main|`wBack|noflags|0|0|",
+        "end_dialog|sb_lock|Close||"
+    }
+    showClientDialog(table.concat(lines, "\n"))
+end
 
-    local dMap = {}
-    for line in pkt:gmatch("[^\r\n]+") do
-        local k, v = line:match("([^|]+)|(.*)")
-        if k then dMap[k] = v end
+-- 3.1 World Lock
+DLG.showSoilWLConfigDialog = function()
+    local lines = {
+        "set_default_color|`o",
+        "add_quick_exit|",
+        "add_label_with_icon|big|`wSetting World Lock (WL)``|left|242|",
+        "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_textbox|`wKonfigurasi World Lock untuk penguncian world farm:|left|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_spacer|small|",
+        string.format("add_checkbox|sb_chk_use_wl|Gunakan World Lock (WL)|%d|", CFG.use_wl and 1 or 0),
+        string.format("add_checkbox|sb_chk_wl_public|Pasang WL secara Public|%d|", CFG.wl_public and 1 or 0),
+        string.format("add_checkbox|sb_chk_ignore_lock|Abaikan jika sudah ada Lock|%d|", CFG.ignore_lock and 1 or 0),
+        "add_spacer|small|",
+        "add_button|sb_btn_save_wl_cfg|`wSave WL Config `2(Save)|noflags|0|0|",
+        "add_button|sb_btn_back_lock|`wBack|noflags|0|0|",
+        "end_dialog|sb_wl_cfg|Cancel||"
+    }
+    showClientDialog(table.concat(lines, "\n"))
+end
+
+-- 3.2 Small Lock
+DLG.showSoilSLConfigDialog = function()
+    local lines = {
+        "set_default_color|`o",
+        "add_quick_exit|",
+        "add_label_with_icon|big|`wSetting Small Lock (SL)``|left|202|",
+        "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_textbox|`wKonfigurasi Small Lock untuk perlindungan pintu entrance:|left|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_spacer|small|",
+        string.format("add_checkbox|sb_chk_use_sl|Gunakan Small Lock (SL)|%d|", CFG.use_sl and 1 or 0),
+        string.format("add_checkbox|sb_chk_sl_public|Pasang SL secara Public|%d|", CFG.sl_public and 1 or 0),
+        string.format("add_checkbox|sb_chk_sl_ignore_air|SL Ignore Air & Apply|%d|", CFG.sl_ignore_air and 1 or 0),
+        "add_spacer|small|",
+        "add_button|sb_btn_save_sl_cfg|`wSave SL Config `2(Save)|noflags|0|0|",
+        "add_button|sb_btn_back_lock|`wBack|noflags|0|0|",
+        "end_dialog|sb_sl_cfg|Cancel||"
+    }
+    showClientDialog(table.concat(lines, "\n"))
+end
+
+-- 3.3 Door Utama (ID Door)
+DLG.showSoilDoorConfigDialog = function()
+    local lines = {
+        "set_default_color|`o",
+        "add_quick_exit|",
+        "add_label_with_icon|big|`wSetting Door Utama (ID Door)``|left|12|",
+        "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_textbox|`wKonfigurasi pintu entrance dengan ID & Label kustom:|left|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_spacer|small|",
+        string.format("add_checkbox|sb_chk_use_id_door|Pasang Door ID Kustom|%d|", CFG.use_id_door and 1 or 0),
+        string.format("add_text_input|sb_in_id_door_itemid|ID Item Door (Default 12)|%d|8|", tonumber(CFG.id_door_itemid) or 12),
+        string.format("add_text_input|sb_in_door_id|Door ID (Default SOIL)|%s|16|", CFG.door_id or "SOIL"),
+        string.format("add_text_input|sb_in_door_label|Label Pintu (Default SOIL)|%s|16|", CFG.door_label or "SOIL"),
+        "add_spacer|small|",
+        "add_button|sb_btn_save_door_cfg|`wSave Door Config `2(Save)|noflags|0|0|",
+        "add_button|sb_btn_back_lock|`wBack|noflags|0|0|",
+        "end_dialog|sb_door_cfg|Cancel||"
+    }
+    showClientDialog(table.concat(lines, "\n"))
+end
+
+-- 3.4 Jammer & Blocker (Air Vent)
+DLG.showSoilMiscLockDialog = function()
+    local lines = {
+        "set_default_color|`o",
+        "add_quick_exit|",
+        "add_label_with_icon|big|`wSetting Jammer & Air Vent``|left|226|",
+        "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_textbox|`wKonfigurasi Signal Jammer & Blocker (Air Vent):|left|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_spacer|small|",
+        string.format("add_checkbox|sb_chk_use_jammer|Gunakan Signal Jammer|%d|", CFG.use_jammer and 1 or 0),
+        string.format("add_checkbox|sb_chk_use_blocker|Gunakan Penghalang Kiri|%d|", CFG.use_blocker_door and 1 or 0),
+        string.format("add_text_input|sb_in_blocker_itemid|ID Item Penghalang (Air Vent=2810)|%d|8|", tonumber(CFG.blocker_door_itemid) or 2810),
+        string.format("add_text_input|sb_in_tele_delay|Jeda Teleport Pintu (ms)|%d|6|", tonumber(CFG.delay_tele_door) or 1500),
+        "add_spacer|small|",
+        "add_button|sb_btn_save_misc_cfg|`wSave Config `2(Save)|noflags|0|0|",
+        "add_button|sb_btn_back_lock|`wBack|noflags|0|0|",
+        "end_dialog|sb_misc_lock|Cancel||"
+    }
+    showClientDialog(table.concat(lines, "\n"))
+end
+
+-- ============================================================================
+-- 4. PENGATURAN SOIL FARM & BOT
+-- ============================================================================
+DLG.showSoilSettingsDialog = function()
+    local is3Z = (CFG.put_mode == "3zigzag") and 1 or 0
+    local lines = {
+        "set_default_color|`o",
+        "add_quick_exit|",
+        "add_label_with_icon|big|`wPengaturan Soil Farm & Bot``|left|32|",
+        "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_textbox|`wKonfigurasi tata letak grid baris, delay & cheats:|left|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_spacer|small|",
+        string.format("add_checkbox|sb_chk_mode_3zigzag|Mode Put 3 Block (Zigzag Cepat)|%d|", is3Z),
+        string.format("add_text_input|sb_in_row_step|Jarak Baris / Step (1-4)|%d|4|", tonumber(CFG.row_step) or 2),
+        string.format("add_text_input|sb_in_start_y|Baris Awal Y (1-10)|%d|4|", tonumber(CFG.row_start_y) or 1),
+        string.format("add_text_input|sb_in_end_y|Baris Akhir Y (40-55)|%d|4|", tonumber(CFG.row_end_y) or 53),
+        string.format("add_text_input|sb_in_start_x|Kolom Awal X (0-10)|%d|4|", tonumber(CFG.row_start_x) or 1),
+        string.format("add_text_input|sb_in_end_x|Kolom Akhir X (80-98)|%d|4|", tonumber(CFG.row_end_x) or 98),
+        string.format("add_checkbox|sb_chk_modfly|Aktifkan Modfly (Terbang Tembus)|%d|", CFG.use_modfly and 1 or 0),
+        string.format("add_checkbox|sb_chk_anti_lava|Anti Lava / Duri|%d|", CFG.use_antilava and 1 or 0),
+        string.format("add_checkbox|sb_chk_auto_collect|Auto Collect Item/Gems|%d|", CFG.auto_collect and 1 or 0),
+        string.format("add_text_input|sb_in_delay_place|Delay Place (ms)|%d|6|", tonumber(CFG.delay_place) or 120),
+        string.format("add_text_input|sb_in_delay_walk|Delay Jalan (ms)|%d|6|", tonumber(CFG.delay_walk) or 140),
+        string.format("add_text_input|sb_in_delay_punch|Delay Pukul (ms)|%d|6|", tonumber(CFG.delay_punch) or 160),
+        string.format("add_text_input|sb_in_delay_warp|Delay Warp World (ms)|%d|6|", tonumber(CFG.delay_warp) or 4000),
+        "add_spacer|small|",
+        "add_button|sb_btn_save_settings_cfg|`wSave Settings `2(Save)|noflags|0|0|",
+        "add_button|sb_btn_dlg_back_main|`wBack|noflags|0|0|",
+        "end_dialog|sb_settings|Cancel||"
+    }
+    showClientDialog(table.concat(lines, "\n"))
+end
+
+-- ============================================================================
+-- 5. LOG AKTIVITAS & TAS (COMPACT)
+-- ============================================================================
+DLG.showSoilLogsDialog = function()
+    local logs = STATE.last_log_lines or {}
+    local lines = {
+        "set_default_color|`o",
+        "add_quick_exit|",
+        "add_label_with_icon|big|`wLog Activity & Mini Console``|left|32|",
+        "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+    }
+    if #logs == 0 then
+        lines[#lines+1] = "add_textbox|`oBelum ada catatan aktivitas bot.|left|"
+    else
+        local startIdx = math.max(1, #logs - 6)
+        for i = startIdx, #logs do
+            local cleanLine = tostring(logs[i] or ""):gsub("[\r\n]+", " ")
+            if #cleanLine > 60 then cleanLine = cleanLine:sub(1, 57) .. "..." end
+            lines[#lines+1] = string.format("add_textbox|%s|left|", cleanLine)
+        end
     end
-    local dName = dMap["dialog_name"] or ""
-    local btn   = dMap["buttonClicked"] or ""
+    lines[#lines+1] = "add_textbox|`p------------------------------------------------------------|left|"
+    lines[#lines+1] = "add_spacer|small|"
+    lines[#lines+1] = "add_button|sb_btn_dlg_clear_logs|`wBersihkan Log|noflags|0|0|"
+    lines[#lines+1] = "add_button|sb_btn_open_bag_view|`wLihat Isi Backpack `2(Bag)|noflags|0|0|"
+    lines[#lines+1] = "add_button|sb_btn_dlg_back_main|`wBack|noflags|0|0|"
+    lines[#lines+1] = "end_dialog|sb_logs|Close||"
+    showClientDialog(table.concat(lines, "\n"))
+end
 
-    -- 1. Handler Dialog World Put
-    if dName == "boren_soil_world_mgr" then
-        if btn == "boren_btn_wfmt_colon" then
-            openUnifiedWorldManager("colon")
-            return
-        elseif btn == "boren_btn_wfmt_pipe" then
-            openUnifiedWorldManager("pipe")
-            return
-        elseif btn == "boren_btn_wfmt_name" then
-            openUnifiedWorldManager("name_only")
-            return
-        elseif btn == "boren_submit_wpaste" then
-            local raw = pkt:match("boren_wpaste_raw|(.-)\nboren_wpaste_replace|")
-                or pkt:match("boren_wpaste_raw|(.-)\nbuttonClicked|")
-                or tostring(dMap["boren_wpaste_raw"] or "")
-            local replace = (dMap["boren_wpaste_replace"] == "1")
-            if replace then CFG.farm_world_list = {} end
+DLG.showSoilBagDialog = function()
+    local bId = tonumber(CFG.block_id) or 8772
+    local bName = resolveItemName(bId)
+    local blockCount = getInvCount(bId)
+    local waterCount = getInvCount(CFG.water_item_id or 822)
+    local wlCount = getInvCount(ITEM.WORLD_LOCK or 242)
+    local slCount = getInvCount(ITEM.SMALL_LOCK or 202)
+    local jammerCount = getInvCount(ITEM.JAMMER or 226)
+    local doorCount = getInvCount(CFG.id_door_itemid or ITEM.DOOR or 12)
+    local blockerCount = getInvCount(CFG.blocker_door_itemid or ITEM.AIR_VENT or 2810)
+    local blastCount = getInvCount(CFG.blast_item_id or 3562)
+
+    local lines = {
+        "set_default_color|`o",
+        "add_quick_exit|",
+        "add_label_with_icon|big|`wIsi Backpack / Inventory``|left|18|",
+        "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        string.format("add_textbox|`w%s (#%d): `2%d item|left|", bName, bId, blockCount),
+        string.format("add_textbox|`wWater Bucket (#%d): `2%d item|left|", CFG.water_item_id or 822, waterCount),
+        string.format("add_textbox|`wWorld Lock (#242): `2%d item `p- `wSmall Lock (#202): `2%d|left|", wlCount, slCount),
+        string.format("add_textbox|`wSignal Jammer (#226): `2%d item `p- `wDoor: `2%d|left|", jammerCount, doorCount),
+        string.format("add_textbox|`wBlocker/Vent (#%d): `2%d item `p- `wBlast: `2%d|left|", CFG.blocker_door_itemid or 2810, blockerCount, blastCount),
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_spacer|small|",
+        "add_button|sb_btn_refresh_bag_dlg|`wRefresh Tas `2(Update)|noflags|0|0|",
+        "add_button|sb_btn_back_logs|`wBack|noflags|0|0|",
+        "end_dialog|sb_bag|Close||"
+    }
+    showClientDialog(table.concat(lines, "\n"))
+end
+
+-- ============================================================================
+-- BACKWARDS COMPATIBILITY WRAPPERS
+-- ============================================================================
+openUnifiedWorldManager = function(fmt) return DLG.showSoilWorldListDialog(1) end
+openEditWorldEntryDialog = function(idx) return DLG.showSoilWorldEditDialog(idx) end
+openUnifiedToolManager = function(fmt) return DLG.showSoilToolListDialog(1) end
+openEditToolEntryDialog = function(idx) return DLG.showSoilToolEditDialog(idx) end
+openUnifiedBlockManager = function(fmt) return DLG.showSoilBlockListDialog(1) end
+openEditBlockEntryDialog = function(idx) return DLG.showSoilBlockEditDialog(idx) end
+
+_G.openUnifiedWorldManager = openUnifiedWorldManager
+_G.openEditWorldEntryDialog = openEditWorldEntryDialog
+_G.openUnifiedToolManager = openUnifiedToolManager
+_G.openEditToolEntryDialog = openEditToolEntryDialog
+_G.openUnifiedBlockManager = openUnifiedBlockManager
+_G.openEditBlockEntryDialog = openEditBlockEntryDialog
+
+-- ============================================================================
+-- 17. COMPACT DIALOG PACKET RETURN HANDLER & PACKET HOOK
+-- ============================================================================
+local function handleSoilDialogReturn(pkt)
+    if not pkt or type(pkt) ~= "string" then return false end
+    local fields = {}
+    for line in pkt:gmatch("[^\r\n]+") do
+        local k, v = line:match("^([^|]+)|(.*)$")
+        if k then
+            v = v:gsub("^%s+", ""):gsub("%s+$", "")
+            if v:sub(-1) == "|" then v = v:sub(1, -2) end
+            fields[k] = v
+        end
+    end
+    local dName = fields.dialog_name or pkt:match("dialog_name|([^|\r\n]+)") or ""
+    local btn = fields.buttonClicked or pkt:match("buttonClicked|([^|\r\n]+)") or ""
+
+    local function getVal(key)
+        local val = fields[key] or pkt:match(key .. "|([^|\r\n]+)") or ""
+        val = val:gsub("^%s+", ""):gsub("%s+$", "")
+        if val:sub(-1) == "|" then val = val:sub(1, -2) end
+        return val
+    end
+    local function getNum(key, default)
+        local val = getVal(key)
+        local n = tonumber(val:match("(%d+)"))
+        return n or default
+    end
+
+    -- --- A. MAIN DIALOG ---
+    if dName == "sb_main" or pkt:find("dialog_name|sb_main", 1, true) then
+        if btn == "sb_btn_dlg_start" or pkt:find("buttonClicked|sb_btn_dlg_start", 1, true) then
+            if not STATE.running then startSoilBot() end
+            DLG.showSoilMainDialog()
+            return true
+        elseif btn == "sb_btn_dlg_stop" or pkt:find("buttonClicked|sb_btn_dlg_stop", 1, true) then
+            stopSoilBot()
+            DLG.showSoilMainDialog()
+            return true
+        elseif btn == "sb_btn_dlg_add_cur" or pkt:find("buttonClicked|sb_btn_dlg_add_cur", 1, true) then
+            local cw = getWorldNameSafe()
+            if cw and cw ~= "" and cw ~= "EXIT" then
+                local exists = false
+                for _, w in ipairs(CFG.farm_world_list or {}) do
+                    if w.name == cw then exists = true; break end
+                end
+                if not exists then
+                    table.insert(CFG.farm_world_list, { name = cw, door = "", done = false, status = "ANTRI" })
+                    persistConfig()
+                    if updateWorldDisplayList then pcall(updateWorldDisplayList) end
+                    if sendNotification then pcall(sendNotification, "World " .. cw .. " ditambahkan!") end
+                else
+                    if sendNotification then pcall(sendNotification, cw .. " sudah ada di antrean!") end
+                end
+            end
+            DLG.showSoilMainDialog()
+            return true
+        elseif btn == "sb_btn_dlg_worlds" or pkt:find("buttonClicked|sb_btn_dlg_worlds", 1, true) then
+            DLG.showSoilWorldsDialog()
+            return true
+        elseif btn == "sb_btn_dlg_storage" or pkt:find("buttonClicked|sb_btn_dlg_storage", 1, true) then
+            DLG.showSoilStorageDialog()
+            return true
+        elseif btn == "sb_btn_dlg_lock" or pkt:find("buttonClicked|sb_btn_dlg_lock", 1, true) then
+            DLG.showSoilLockDialog()
+            return true
+        elseif btn == "sb_btn_dlg_settings" or pkt:find("buttonClicked|sb_btn_dlg_settings", 1, true) then
+            DLG.showSoilSettingsDialog()
+            return true
+        elseif btn == "sb_btn_dlg_logs" or pkt:find("buttonClicked|sb_btn_dlg_logs", 1, true) then
+            DLG.showSoilLogsDialog()
+            return true
+        elseif btn == "sb_btn_dlg_close" or pkt:find("buttonClicked|sb_btn_dlg_close", 1, true) then
+            return true
+        end
+        return true
+
+    -- --- B. SETTING WORLD PUT ---
+    elseif dName == "sb_worlds" or pkt:find("dialog_name|sb_worlds", 1, true) then
+        if btn == "sb_btn_toggle_mode" or pkt:find("buttonClicked|sb_btn_toggle_mode", 1, true) then
+            CFG.world_mode = (CFG.world_mode == "random") and "manual" or "random"
+            persistConfig()
+            if sendNotification then pcall(sendNotification, "Mode World diubah: " .. CFG.world_mode:upper()) end
+            DLG.showSoilWorldsDialog()
+            return true
+        elseif btn == "sb_btn_open_add_w" or pkt:find("buttonClicked|sb_btn_open_add_w", 1, true) then
+            DLG.showSoilAddWorldDialog()
+            return true
+        elseif btn == "sb_btn_open_find_w" or pkt:find("buttonClicked|sb_btn_open_find_w", 1, true) then
+            DLG.showSoilFindWorldDialog()
+            return true
+        elseif btn == "sb_btn_open_batch_w" or pkt:find("buttonClicked|sb_btn_open_batch_w", 1, true) then
+            DLG.showSoilBatchWorldDialog()
+            return true
+        elseif btn == "sb_btn_open_list_w" or pkt:find("buttonClicked|sb_btn_open_list_w", 1, true) then
+            DLG.showSoilWorldListDialog(1)
+            return true
+        elseif btn == "sb_btn_open_file_w" or pkt:find("buttonClicked|sb_btn_open_file_w", 1, true) then
+            DLG.showSoilFileWorldDialog()
+            return true
+        elseif btn == "sb_btn_dlg_reset_queue" or pkt:find("buttonClicked|sb_btn_dlg_reset_queue", 1, true) then
+            for _, w in ipairs(CFG.farm_world_list or {}) do w.done = false; w.status = "ANTRI" end
+            persistConfig()
+            if updateWorldDisplayList then pcall(updateWorldDisplayList) end
+            if sendNotification then pcall(sendNotification, "Status queue di-reset!") end
+            DLG.showSoilWorldsDialog()
+            return true
+        elseif btn == "sb_btn_dlg_back_main" or pkt:find("buttonClicked|sb_btn_dlg_back_main", 1, true) then
+            DLG.showSoilMainDialog()
+            return true
+        end
+        return true
+
+    -- Add Single World
+    elseif dName == "sb_add_w" or pkt:find("dialog_name|sb_add_w", 1, true) then
+        if btn == "sb_btn_do_add_world" or pkt:find("buttonClicked|sb_btn_do_add_world", 1, true) then
+            local rawW = getVal("sb_in_world_name"):upper():gsub("%s+", "")
+            local wDoor = getVal("sb_in_door_id"):gsub("%s+", "")
+            local wName = rawW
+            if rawW:find(":") then wName, wDoor = rawW:match("^([^:]+):?(.*)$")
+            elseif rawW:find("|") then wName, wDoor = rawW:match("^([^|]+)|?(.*)$") end
+            if wName and wName ~= "" and wName ~= "0" and wName ~= "EXIT" then
+                local exists = false
+                for _, w in ipairs(CFG.farm_world_list or {}) do
+                    if w.name == wName then exists = true; break end
+                end
+                if not exists then
+                    table.insert(CFG.farm_world_list, { name = wName, door = wDoor or "", done = false, status = "ANTRI" })
+                    persistConfig()
+                    if updateWorldDisplayList then pcall(updateWorldDisplayList) end
+                    if sendNotification then pcall(sendNotification, "World " .. wName .. " ditambahkan!") end
+                else
+                    if sendNotification then pcall(sendNotification, wName .. " sudah ada di antrean!") end
+                end
+            end
+            DLG.showSoilWorldsDialog()
+            return true
+        elseif btn == "sb_btn_add_cur_w" or pkt:find("buttonClicked|sb_btn_add_cur_w", 1, true) then
+            local cw = getWorldNameSafe()
+            if cw and cw ~= "" and cw ~= "EXIT" then
+                local exists = false
+                for _, w in ipairs(CFG.farm_world_list or {}) do
+                    if w.name == cw then exists = true; break end
+                end
+                if not exists then
+                    table.insert(CFG.farm_world_list, { name = cw, door = "", done = false, status = "ANTRI" })
+                    persistConfig()
+                    if updateWorldDisplayList then pcall(updateWorldDisplayList) end
+                    if sendNotification then pcall(sendNotification, "World " .. cw .. " ditambahkan!") end
+                else
+                    if sendNotification then pcall(sendNotification, cw .. " sudah ada di antrean!") end
+                end
+            end
+            DLG.showSoilAddWorldDialog()
+            return true
+        elseif btn == "sb_btn_back_worlds" or pkt:find("buttonClicked|sb_btn_back_worlds", 1, true) then
+            DLG.showSoilWorldsDialog()
+            return true
+        end
+        return true
+
+    -- Find Random World
+    elseif dName == "sb_find_w" or pkt:find("dialog_name|sb_find_w", 1, true) then
+        local lenVal = getNum("sb_in_find_len", 0)
+        if lenVal and lenVal >= 3 and lenVal <= 16 then CFG.random_length = lenVal end
+        local numVal = getVal("sb_chk_find_num")
+        if numVal ~= "" then CFG.random_use_numbers = (numVal:find("1") ~= nil) end
+        local tarVal = getNum("sb_in_find_target", 0)
+        if tarVal and tarVal >= 1 then CFG.random_target_count = tarVal end
+        local blastChk = getVal("sb_chk_auto_blast")
+        if blastChk ~= "" then CFG.auto_use_blast = (blastChk:find("1") ~= nil) end
+        local bId = getNum("sb_in_blast_id", 0)
+        if bId and bId > 0 then CFG.blast_item_id = bId end
+        persistConfig()
+
+        if btn == "sb_btn_find_toggle_mode" or pkt:find("buttonClicked|sb_btn_find_toggle_mode", 1, true) then
+            CFG.world_mode = (CFG.world_mode == "random") and "manual" or "random"
+            persistConfig()
+            if sendNotification then pcall(sendNotification, "Find Random World: " .. ((CFG.world_mode == "random") and "ON" or "OFF")) end
+            DLG.showSoilFindWorldDialog()
+            return true
+        elseif btn == "sb_btn_generate_1_world" or pkt:find("buttonClicked|sb_btn_generate_1_world", 1, true) then
+            local rLen = tonumber(CFG.random_length) or 6
+            local rNum = CFG.random_use_numbers
+            local randName = generateRandomWorldName(rLen, rNum)
+            if randName and randName ~= "" then
+                table.insert(CFG.farm_world_list, { name = randName, door = "", done = false, status = "ANTRI" })
+                persistConfig()
+                if updateWorldDisplayList then pcall(updateWorldDisplayList) end
+                if sendNotification then pcall(sendNotification, "Generated: " .. randName) end
+            end
+            DLG.showSoilFindWorldDialog()
+            return true
+        elseif btn == "sb_btn_save_find_cfg" or pkt:find("buttonClicked|sb_btn_save_find_cfg", 1, true) then
+            if sendNotification then pcall(sendNotification, "Konfigurasi Find World disimpan!") end
+            DLG.showSoilFindWorldDialog()
+            return true
+        elseif btn == "sb_btn_back_worlds" or pkt:find("buttonClicked|sb_btn_back_worlds", 1, true) then
+            DLG.showSoilWorldsDialog()
+            return true
+        end
+        return true
+
+    -- Batch Add World
+    elseif dName == "sb_batch_w" or pkt:find("dialog_name|sb_batch_w", 1, true) then
+        if btn == "sb_btn_do_batch_add" or pkt:find("buttonClicked|sb_btn_do_batch_add", 1, true) then
+            local raw = getVal("sb_in_batch_worlds")
+            local rep = (getVal("sb_chk_batch_replace") == "1")
+            if rep then CFG.farm_world_list = {} end
             local parsed = parseWorldBatchFromString(raw)
+            local added = 0
             for _, item in ipairs(parsed) do
-                table.insert(CFG.farm_world_list, { name = item.name, door = item.door, status = "ANTRI", done = false })
+                local exists = false
+                for _, w in ipairs(CFG.farm_world_list) do
+                    if w.name == item.name then exists = true; break end
+                end
+                if not exists then
+                    table.insert(CFG.farm_world_list, { name = item.name, door = item.door or "", status = "ANTRI", done = false })
+                    added = added + 1
+                end
             end
             persistConfig()
-            updateWorldDisplayList()
-            if sendNotification then pcall(sendNotification, string.format("%d World masuk ke antrean!", #parsed)) end
-            openUnifiedWorldManager()
-            return
+            if updateWorldDisplayList then pcall(updateWorldDisplayList) end
+            if sendNotification then pcall(sendNotification, string.format("%d World ditambahkan!", added)) end
+            DLG.showSoilWorldsDialog()
+            return true
+        elseif btn == "sb_btn_back_worlds" or pkt:find("buttonClicked|sb_btn_back_worlds", 1, true) then
+            DLG.showSoilWorldsDialog()
+            return true
         end
+        return true
 
-        local editIdx = tonumber(btn:match("^boren_wedit_(%d+)$"))
-        if editIdx then
-            openEditWorldEntryDialog(editIdx)
-            return
-        end
-        local delIdx = tonumber(btn:match("^boren_whapus_(%d+)$"))
-        if delIdx and CFG.farm_world_list[delIdx] then
-            table.remove(CFG.farm_world_list, delIdx)
+    -- List World Put (Pagination & Actions)
+    elseif dName == "sb_list_w" or pkt:find("dialog_name|sb_list_w", 1, true) then
+        local prevP = btn:match("sb_btn_w_prev_(%d+)")
+        local nextP = btn:match("sb_btn_w_next_(%d+)")
+        local editIdx = btn:match("sb_btn_w_edit_(%d+)")
+        local delIdx = btn:match("sb_btn_w_del_(%d+)")
+
+        if prevP then
+            DLG.showSoilWorldListDialog(tonumber(prevP))
+            return true
+        elseif nextP then
+            DLG.showSoilWorldListDialog(tonumber(nextP))
+            return true
+        elseif editIdx then
+            DLG.showSoilWorldEditDialog(tonumber(editIdx))
+            return true
+        elseif delIdx then
+            local idx = tonumber(delIdx)
+            if idx and CFG.farm_world_list[idx] then
+                table.remove(CFG.farm_world_list, idx)
+                persistConfig()
+                if updateWorldDisplayList then pcall(updateWorldDisplayList) end
+                if sendNotification then pcall(sendNotification, "World #" .. idx .. " dihapus!") end
+            end
+            DLG.showSoilWorldListDialog(DLG.wlist_page or 1)
+            return true
+        elseif btn == "sb_btn_clear_all_worlds" or pkt:find("buttonClicked|sb_btn_clear_all_worlds", 1, true) then
+            CFG.farm_world_list = {}
             persistConfig()
-            updateWorldDisplayList()
-            openUnifiedWorldManager()
-            return
+            if updateWorldDisplayList then pcall(updateWorldDisplayList) end
+            if sendNotification then pcall(sendNotification, "Semua world di-clear!") end
+            DLG.showSoilWorldListDialog(1)
+            return true
+        elseif btn == "sb_btn_back_worlds" or pkt:find("buttonClicked|sb_btn_back_worlds", 1, true) then
+            DLG.showSoilWorldsDialog()
+            return true
         end
+        return true
 
-    elseif dName:find("^boren_soil_world_edit_(%d+)$") then
-        local idx = tonumber(dName:match("^boren_soil_world_edit_(%d+)$"))
+    -- Edit World Put Dialog
+    elseif dName:find("^sb_edit_w_(%d+)$") or pkt:find("dialog_name|sb_edit_w_", 1, true) then
+        local idx = tonumber(dName:match("^sb_edit_w_(%d+)") or pkt:match("dialog_name|sb_edit_w_(%d+)"))
+        if not idx then
+            idx = tonumber(btn:match("sb_btn_save_w_edit_(%d+)") or btn:match("sb_btn_del_w_edit_(%d+)"))
+        end
         if idx and CFG.farm_world_list[idx] then
-            if btn == "save_w_edit" then
-                local newName = tostring(dMap["edit_w_name"] or ""):upper():gsub("%s+", "")
-                local newDoor = tostring(dMap["edit_w_door"] or ""):gsub("%s+", "")
-                local newDone = (dMap["edit_w_done"] == "1")
-                if newName ~= "" then
+            if btn:find("sb_btn_save_w_edit_") or pkt:find("buttonClicked|sb_btn_save_w_edit_", 1, true) then
+                local newName = getVal("sb_edit_w_name"):upper():gsub("%s+", "")
+                local newDoor = getVal("sb_edit_w_door"):gsub("%s+", "")
+                local newDone = (getVal("sb_edit_w_done") == "1")
+                if newName ~= "" and newName ~= "0" and newName ~= "EXIT" then
                     CFG.farm_world_list[idx].name = newName
                     CFG.farm_world_list[idx].door = newDoor
                     CFG.farm_world_list[idx].done = newDone
                     CFG.farm_world_list[idx].status = newDone and "DONE" or "ANTRI"
                     persistConfig()
-                    updateWorldDisplayList()
+                    if updateWorldDisplayList then pcall(updateWorldDisplayList) end
+                    if sendNotification then pcall(sendNotification, "World #" .. idx .. " diupdate!") end
                 end
-                openUnifiedWorldManager()
-                return
-            elseif btn == "del_w_edit" then
+                DLG.showSoilWorldListDialog(DLG.wlist_page or 1)
+                return true
+            elseif btn:find("sb_btn_del_w_edit_") or pkt:find("buttonClicked|sb_btn_del_w_edit_", 1, true) then
                 table.remove(CFG.farm_world_list, idx)
                 persistConfig()
-                updateWorldDisplayList()
-                openUnifiedWorldManager()
-                return
+                if updateWorldDisplayList then pcall(updateWorldDisplayList) end
+                if sendNotification then pcall(sendNotification, "World #" .. idx .. " dihapus!") end
+                DLG.showSoilWorldListDialog(DLG.wlist_page or 1)
+                return true
             end
         end
+        if btn == "sb_btn_back_w_list" or pkt:find("buttonClicked|sb_btn_back_w_list", 1, true) then
+            DLG.showSoilWorldListDialog(DLG.wlist_page or 1)
+            return true
+        end
+        return true
 
-    -- 2. Handler Dialog Gudang Alat
-    elseif dName == "boren_soil_tool_mgr" then
-        if btn == "boren_btn_tlfmt_colon" then
-            openUnifiedToolManager("colon")
-            return
-        elseif btn == "boren_btn_tlfmt_pipe" then
-            openUnifiedToolManager("pipe")
-            return
-        elseif btn == "boren_btn_tlfmt_name" then
-            openUnifiedToolManager("name_only")
-            return
-        elseif btn == "boren_submit_tlpaste" then
-            local raw = pkt:match("boren_tlpaste_raw|(.-)\nboren_tlpaste_replace|")
-                or pkt:match("boren_tlpaste_raw|(.-)\nbuttonClicked|")
-                or tostring(dMap["boren_tlpaste_raw"] or "")
-            local replace = (dMap["boren_tlpaste_replace"] == "1")
-            if replace then CFG.storage_tool_list = {} end
+    -- File & Backup Manager
+    elseif dName == "sb_file_w" or pkt:find("dialog_name|sb_file_w", 1, true) then
+        if btn == "sb_btn_do_save_file" or pkt:find("buttonClicked|sb_btn_do_save_file", 1, true) then
+            local fn = getVal("sb_in_file_name")
+            if fn ~= "" then CFG.world_file_name = fn end
+            local lines = {}
+            for _, w in ipairs(CFG.farm_world_list or {}) do
+                local d = (w.door and w.door ~= "") and w.door or ""
+                table.insert(lines, (d ~= "") and (w.name .. ":" .. d) or w.name)
+            end
+            safeWriteFile(CFG.world_file_name, table.concat(lines, "\n"))
+            persistConfig()
+            if sendNotification then pcall(sendNotification, string.format("Antrean disimpan ke %s (%d world)", CFG.world_file_name, #CFG.farm_world_list)) end
+            DLG.showSoilFileWorldDialog()
+            return true
+        elseif btn == "sb_btn_do_load_file" or pkt:find("buttonClicked|sb_btn_do_load_file", 1, true) then
+            local fn = getVal("sb_in_file_name")
+            if fn ~= "" then CFG.world_file_name = fn end
+            local content = safeReadFile(CFG.world_file_name)
+            if content and content ~= "" then
+                local parsed = parseWorldBatchFromString(content)
+                local count = 0
+                for _, item in ipairs(parsed) do
+                    table.insert(CFG.farm_world_list, { name = item.name, door = item.door, status = "ANTRI", done = false })
+                    count = count + 1
+                end
+                persistConfig()
+                if updateWorldDisplayList then pcall(updateWorldDisplayList) end
+                if sendNotification then pcall(sendNotification, string.format("%d World dimuat dari %s!", count, CFG.world_file_name)) end
+            else
+                if sendNotification then pcall(sendNotification, "Gagal membaca: " .. CFG.world_file_name) end
+            end
+            DLG.showSoilFileWorldDialog()
+            return true
+        elseif btn == "sb_btn_back_worlds" or pkt:find("buttonClicked|sb_btn_back_worlds", 1, true) then
+            DLG.showSoilWorldsDialog()
+            return true
+        end
+        return true
+
+    -- --- C. SETTING STORAGE HUB ---
+    elseif dName == "sb_storage" or pkt:find("dialog_name|sb_storage", 1, true) then
+        if btn == "sb_btn_open_tool_store" or pkt:find("buttonClicked|sb_btn_open_tool_store", 1, true) then
+            DLG.showSoilToolStorageDialog()
+            return true
+        elseif btn == "sb_btn_open_tool_list" or pkt:find("buttonClicked|sb_btn_open_tool_list", 1, true) then
+            DLG.showSoilToolListDialog(1)
+            return true
+        elseif btn == "sb_btn_open_block_store" or pkt:find("buttonClicked|sb_btn_open_block_store", 1, true) then
+            DLG.showSoilBlockStorageDialog()
+            return true
+        elseif btn == "sb_btn_open_block_list" or pkt:find("buttonClicked|sb_btn_open_block_list", 1, true) then
+            DLG.showSoilBlockListDialog(1)
+            return true
+        elseif btn == "sb_btn_open_block_cfg" or pkt:find("buttonClicked|sb_btn_open_block_cfg", 1, true) then
+            DLG.showSoilBlockConfigDialog()
+            return true
+        elseif btn == "sb_btn_dlg_back_main" or pkt:find("buttonClicked|sb_btn_dlg_back_main", 1, true) then
+            DLG.showSoilMainDialog()
+            return true
+        end
+        return true
+
+    -- Gudang Alat
+    elseif dName == "sb_tool_storage" or pkt:find("dialog_name|sb_tool_storage", 1, true) then
+        if btn == "sb_btn_do_add_tool" or pkt:find("buttonClicked|sb_btn_do_add_tool", 1, true) then
+            local raw = getVal("sb_in_tool_name"):upper():gsub("%s+", "")
+            local d = getVal("sb_in_tool_door"):gsub("%s+", "")
+            local name = raw
+            if raw:find(":") then name, d = raw:match("^([^:]+):?(.*)$")
+            elseif raw:find("|") then name, d = raw:match("^([^|]+)|?(.*)$") end
+            if name and name ~= "" and name ~= "0" and name ~= "EXIT" then
+                table.insert(CFG.storage_tool_list, { name = name, door = d or "" })
+                persistConfig()
+                if updateToolDisplayList then pcall(updateToolDisplayList) end
+                if sendNotification then pcall(sendNotification, "Gudang Alat " .. name .. " ditambahkan!") end
+            end
+            DLG.showSoilStorageDialog()
+            return true
+        elseif btn == "sb_btn_add_cur_tool" or pkt:find("buttonClicked|sb_btn_add_cur_tool", 1, true) then
+            local curW = getWorldNameSafe()
+            if curW and curW ~= "" and curW ~= "EXIT" then
+                table.insert(CFG.storage_tool_list, { name = curW, door = "" })
+                persistConfig()
+                if updateToolDisplayList then pcall(updateToolDisplayList) end
+                if sendNotification then pcall(sendNotification, "Gudang Alat " .. curW .. " ditambahkan!") end
+            end
+            DLG.showSoilToolStorageDialog()
+            return true
+        elseif btn == "sb_btn_open_tool_batch" or pkt:find("buttonClicked|sb_btn_open_tool_batch", 1, true) then
+            DLG.showSoilToolBatchDialog()
+            return true
+        elseif btn == "sb_btn_open_tool_list" or pkt:find("buttonClicked|sb_btn_open_tool_list", 1, true) then
+            DLG.showSoilToolListDialog(1)
+            return true
+        elseif btn == "sb_btn_back_storage" or pkt:find("buttonClicked|sb_btn_back_storage", 1, true) then
+            DLG.showSoilStorageDialog()
+            return true
+        end
+        return true
+
+    -- Batch Gudang Alat
+    elseif dName == "sb_batch_tool" or pkt:find("dialog_name|sb_batch_tool", 1, true) then
+        if btn == "sb_btn_do_batch_tool_add" or pkt:find("buttonClicked|sb_btn_do_batch_tool_add", 1, true) then
+            local raw = getVal("sb_in_batch_tools")
+            local rep = (getVal("sb_chk_batch_tool_replace") == "1")
+            if rep then CFG.storage_tool_list = {} end
             local parsed = parseWorldBatchFromString(raw)
+            local added = 0
             for _, item in ipairs(parsed) do
-                table.insert(CFG.storage_tool_list, { name = item.name, door = item.door })
+                table.insert(CFG.storage_tool_list, { name = item.name, door = item.door or "" })
+                added = added + 1
             end
             persistConfig()
-            updateToolDisplayList()
-            if sendNotification then pcall(sendNotification, string.format("%d Gudang Alat dimasukkan!", #parsed)) end
-            openUnifiedToolManager()
-            return
+            if updateToolDisplayList then pcall(updateToolDisplayList) end
+            if sendNotification then pcall(sendNotification, string.format("%d Gudang Alat ditambahkan!", added)) end
+            DLG.showSoilStorageDialog()
+            return true
+        elseif btn == "sb_btn_back_tool_store" or pkt:find("buttonClicked|sb_btn_back_tool_store", 1, true) then
+            DLG.showSoilToolStorageDialog()
+            return true
         end
+        return true
 
-        local editIdx = tonumber(btn:match("^boren_tledit_(%d+)$"))
-        if editIdx then
-            openEditToolEntryDialog(editIdx)
-            return
-        end
-        local delIdx = tonumber(btn:match("^boren_tlhapus_(%d+)$"))
-        if delIdx and CFG.storage_tool_list[delIdx] then
-            table.remove(CFG.storage_tool_list, delIdx)
+    -- List Gudang Alat
+    elseif dName == "sb_tool_list" or pkt:find("dialog_name|sb_tool_list", 1, true) then
+        local prevP = btn:match("sb_btn_tool_prev_(%d+)")
+        local nextP = btn:match("sb_btn_tool_next_(%d+)")
+        local editIdx = btn:match("sb_btn_tool_edit_(%d+)")
+        local delIdx = btn:match("sb_btn_tool_del_(%d+)")
+
+        if prevP then
+            DLG.showSoilToolListDialog(tonumber(prevP))
+            return true
+        elseif nextP then
+            DLG.showSoilToolListDialog(tonumber(nextP))
+            return true
+        elseif editIdx then
+            DLG.showSoilToolEditDialog(tonumber(editIdx))
+            return true
+        elseif delIdx then
+            local idx = tonumber(delIdx)
+            if idx and CFG.storage_tool_list[idx] then
+                table.remove(CFG.storage_tool_list, idx)
+                persistConfig()
+                if updateToolDisplayList then pcall(updateToolDisplayList) end
+                if sendNotification then pcall(sendNotification, "Gudang Alat #" .. idx .. " dihapus!") end
+            end
+            DLG.showSoilToolListDialog(DLG.tool_page or 1)
+            return true
+        elseif btn == "sb_btn_clear_all_tools" or pkt:find("buttonClicked|sb_btn_clear_all_tools", 1, true) then
+            CFG.storage_tool_list = {}
             persistConfig()
-            updateToolDisplayList()
-            openUnifiedToolManager()
-            return
+            if updateToolDisplayList then pcall(updateToolDisplayList) end
+            if sendNotification then pcall(sendNotification, "Semua gudang alat di-clear!") end
+            DLG.showSoilToolListDialog(1)
+            return true
+        elseif btn == "sb_btn_back_storage" or pkt:find("buttonClicked|sb_btn_back_storage", 1, true) then
+            DLG.showSoilStorageDialog()
+            return true
         end
+        return true
 
-    elseif dName:find("^boren_soil_tool_edit_(%d+)$") then
-        local idx = tonumber(dName:match("^boren_soil_tool_edit_(%d+)$"))
+    -- Edit Gudang Alat Dialog
+    elseif dName:find("^sb_edit_tool_(%d+)$") or pkt:find("dialog_name|sb_edit_tool_", 1, true) then
+        local idx = tonumber(dName:match("^sb_edit_tool_(%d+)") or pkt:match("dialog_name|sb_edit_tool_(%d+)"))
+        if not idx then
+            idx = tonumber(btn:match("sb_btn_save_tool_edit_(%d+)") or btn:match("sb_btn_del_tool_edit_(%d+)"))
+        end
         if idx and CFG.storage_tool_list[idx] then
-            if btn == "save_tl_edit" then
-                local newName = tostring(dMap["edit_tl_name"] or ""):upper():gsub("%s+", "")
-                local newDoor = tostring(dMap["edit_tl_door"] or ""):gsub("%s+", "")
-                if newName ~= "" then
+            if btn:find("sb_btn_save_tool_edit_") or pkt:find("buttonClicked|sb_btn_save_tool_edit_", 1, true) then
+                local newName = getVal("sb_edit_tool_name"):upper():gsub("%s+", "")
+                local newDoor = getVal("sb_edit_tool_door"):gsub("%s+", "")
+                if newName ~= "" and newName ~= "0" and newName ~= "EXIT" then
                     CFG.storage_tool_list[idx].name = newName
                     CFG.storage_tool_list[idx].door = newDoor
                     persistConfig()
-                    updateToolDisplayList()
+                    if updateToolDisplayList then pcall(updateToolDisplayList) end
+                    if sendNotification then pcall(sendNotification, "Gudang Alat #" .. idx .. " diupdate!") end
                 end
-                openUnifiedToolManager()
-                return
-            elseif btn == "del_tl_edit" then
+                DLG.showSoilToolListDialog(DLG.tool_page or 1)
+                return true
+            elseif btn:find("sb_btn_del_tool_edit_") or pkt:find("buttonClicked|sb_btn_del_tool_edit_", 1, true) then
                 table.remove(CFG.storage_tool_list, idx)
                 persistConfig()
-                updateToolDisplayList()
-                openUnifiedToolManager()
-                return
+                if updateToolDisplayList then pcall(updateToolDisplayList) end
+                if sendNotification then pcall(sendNotification, "Gudang Alat #" .. idx .. " dihapus!") end
+                DLG.showSoilToolListDialog(DLG.tool_page or 1)
+                return true
             end
         end
+        if btn == "sb_btn_back_tool_list" or pkt:find("buttonClicked|sb_btn_back_tool_list", 1, true) then
+            DLG.showSoilToolListDialog(DLG.tool_page or 1)
+            return true
+        end
+        return true
 
-    -- 3. Handler Dialog Gudang Block & Water
-    elseif dName == "boren_soil_block_mgr" then
-        if btn == "boren_btn_bkfmt_colon" then
-            openUnifiedBlockManager("colon")
-            return
-        elseif btn == "boren_btn_bkfmt_pipe" then
-            openUnifiedBlockManager("pipe")
-            return
-        elseif btn == "boren_btn_bkfmt_name" then
-            openUnifiedBlockManager("name_only")
-            return
-        elseif btn == "boren_submit_bkpaste" then
-            local raw = pkt:match("boren_bkpaste_raw|(.-)\nboren_bkpaste_replace|")
-                or pkt:match("boren_bkpaste_raw|(.-)\nbuttonClicked|")
-                or tostring(dMap["boren_bkpaste_raw"] or "")
-            local replace = (dMap["boren_bkpaste_replace"] == "1")
-            if replace then CFG.storage_block_list = {} end
+    -- Gudang Block & Water
+    elseif dName == "sb_block_storage" or pkt:find("dialog_name|sb_block_storage", 1, true) then
+        if btn == "sb_btn_do_add_block" or pkt:find("buttonClicked|sb_btn_do_add_block", 1, true) then
+            local raw = getVal("sb_in_block_name"):upper():gsub("%s+", "")
+            local d = getVal("sb_in_block_door"):gsub("%s+", "")
+            local name = raw
+            if raw:find(":") then name, d = raw:match("^([^:]+):?(.*)$")
+            elseif raw:find("|") then name, d = raw:match("^([^|]+)|?(.*)$") end
+            if name and name ~= "" and name ~= "0" and name ~= "EXIT" then
+                table.insert(CFG.storage_block_list, { name = name, door = d or "" })
+                persistConfig()
+                if updateBlockDisplayList then pcall(updateBlockDisplayList) end
+                if sendNotification then pcall(sendNotification, "Gudang Block " .. name .. " ditambahkan!") end
+            end
+            DLG.showSoilStorageDialog()
+            return true
+        elseif btn == "sb_btn_add_cur_block" or pkt:find("buttonClicked|sb_btn_add_cur_block", 1, true) then
+            local curW = getWorldNameSafe()
+            if curW and curW ~= "" and curW ~= "EXIT" then
+                table.insert(CFG.storage_block_list, { name = curW, door = "" })
+                persistConfig()
+                if updateBlockDisplayList then pcall(updateBlockDisplayList) end
+                if sendNotification then pcall(sendNotification, "Gudang Block " .. curW .. " ditambahkan!") end
+            end
+            DLG.showSoilBlockStorageDialog()
+            return true
+        elseif btn == "sb_btn_open_block_batch" or pkt:find("buttonClicked|sb_btn_open_block_batch", 1, true) then
+            DLG.showSoilBlockBatchDialog()
+            return true
+        elseif btn == "sb_btn_open_block_list" or pkt:find("buttonClicked|sb_btn_open_block_list", 1, true) then
+            DLG.showSoilBlockListDialog(1)
+            return true
+        elseif btn == "sb_btn_back_storage" or pkt:find("buttonClicked|sb_btn_back_storage", 1, true) then
+            DLG.showSoilStorageDialog()
+            return true
+        end
+        return true
+
+    -- Batch Gudang Block
+    elseif dName == "sb_batch_block" or pkt:find("dialog_name|sb_batch_block", 1, true) then
+        if btn == "sb_btn_do_batch_block_add" or pkt:find("buttonClicked|sb_btn_do_batch_block_add", 1, true) then
+            local raw = getVal("sb_in_batch_blocks")
+            local rep = (getVal("sb_chk_batch_block_replace") == "1")
+            if rep then CFG.storage_block_list = {} end
             local parsed = parseWorldBatchFromString(raw)
+            local added = 0
             for _, item in ipairs(parsed) do
-                table.insert(CFG.storage_block_list, { name = item.name, door = item.door })
+                table.insert(CFG.storage_block_list, { name = item.name, door = item.door or "" })
+                added = added + 1
             end
             persistConfig()
-            updateBlockDisplayList()
-            if sendNotification then pcall(sendNotification, string.format("%d Gudang Block dimasukkan!", #parsed)) end
-            openUnifiedBlockManager()
-            return
+            if updateBlockDisplayList then pcall(updateBlockDisplayList) end
+            if sendNotification then pcall(sendNotification, string.format("%d Gudang Block ditambahkan!", added)) end
+            DLG.showSoilStorageDialog()
+            return true
+        elseif btn == "sb_btn_back_block_store" or pkt:find("buttonClicked|sb_btn_back_block_store", 1, true) then
+            DLG.showSoilBlockStorageDialog()
+            return true
         end
+        return true
 
-        local editIdx = tonumber(btn:match("^boren_bkedit_(%d+)$"))
-        if editIdx then
-            openEditBlockEntryDialog(editIdx)
-            return
-        end
-        local delIdx = tonumber(btn:match("^boren_bkhapus_(%d+)$"))
-        if delIdx and CFG.storage_block_list[delIdx] then
-            table.remove(CFG.storage_block_list, delIdx)
+    -- List Gudang Block
+    elseif dName == "sb_block_list" or pkt:find("dialog_name|sb_block_list", 1, true) then
+        local prevP = btn:match("sb_btn_blk_prev_(%d+)")
+        local nextP = btn:match("sb_btn_blk_next_(%d+)")
+        local editIdx = btn:match("sb_btn_blk_edit_(%d+)")
+        local delIdx = btn:match("sb_btn_blk_del_(%d+)")
+
+        if prevP then
+            DLG.showSoilBlockListDialog(tonumber(prevP))
+            return true
+        elseif nextP then
+            DLG.showSoilBlockListDialog(tonumber(nextP))
+            return true
+        elseif editIdx then
+            DLG.showSoilBlockEditDialog(tonumber(editIdx))
+            return true
+        elseif delIdx then
+            local idx = tonumber(delIdx)
+            if idx and CFG.storage_block_list[idx] then
+                table.remove(CFG.storage_block_list, idx)
+                persistConfig()
+                if updateBlockDisplayList then pcall(updateBlockDisplayList) end
+                if sendNotification then pcall(sendNotification, "Gudang Block #" .. idx .. " dihapus!") end
+            end
+            DLG.showSoilBlockListDialog(DLG.block_page or 1)
+            return true
+        elseif btn == "sb_btn_clear_all_blocks" or pkt:find("buttonClicked|sb_btn_clear_all_blocks", 1, true) then
+            CFG.storage_block_list = {}
             persistConfig()
-            updateBlockDisplayList()
-            openUnifiedBlockManager()
-            return
+            if updateBlockDisplayList then pcall(updateBlockDisplayList) end
+            if sendNotification then pcall(sendNotification, "Semua gudang block di-clear!") end
+            DLG.showSoilBlockListDialog(1)
+            return true
+        elseif btn == "sb_btn_back_storage" or pkt:find("buttonClicked|sb_btn_back_storage", 1, true) then
+            DLG.showSoilStorageDialog()
+            return true
         end
+        return true
 
-    elseif dName:find("^boren_soil_block_edit_(%d+)$") then
-        local idx = tonumber(dName:match("^boren_soil_block_edit_(%d+)$"))
+    -- Edit Gudang Block Dialog
+    elseif dName:find("^sb_edit_blk_(%d+)$") or pkt:find("dialog_name|sb_edit_blk_", 1, true) then
+        local idx = tonumber(dName:match("^sb_edit_blk_(%d+)") or pkt:match("dialog_name|sb_edit_blk_(%d+)"))
+        if not idx then
+            idx = tonumber(btn:match("sb_btn_save_blk_edit_(%d+)") or btn:match("sb_btn_del_blk_edit_(%d+)"))
+        end
         if idx and CFG.storage_block_list[idx] then
-            if btn == "save_bk_edit" then
-                local newName = tostring(dMap["edit_bk_name"] or ""):upper():gsub("%s+", "")
-                local newDoor = tostring(dMap["edit_bk_door"] or ""):gsub("%s+", "")
-                if newName ~= "" then
+            if btn:find("sb_btn_save_blk_edit_") or pkt:find("buttonClicked|sb_btn_save_blk_edit_", 1, true) then
+                local newName = getVal("sb_edit_blk_name"):upper():gsub("%s+", "")
+                local newDoor = getVal("sb_edit_blk_door"):gsub("%s+", "")
+                if newName ~= "" and newName ~= "0" and newName ~= "EXIT" then
                     CFG.storage_block_list[idx].name = newName
                     CFG.storage_block_list[idx].door = newDoor
                     persistConfig()
-                    updateBlockDisplayList()
+                    if updateBlockDisplayList then pcall(updateBlockDisplayList) end
+                    if sendNotification then pcall(sendNotification, "Gudang Block #" .. idx .. " diupdate!") end
                 end
-                openUnifiedBlockManager()
-                return
-            elseif btn == "del_bk_edit" then
+                DLG.showSoilBlockListDialog(DLG.block_page or 1)
+                return true
+            elseif btn:find("sb_btn_del_blk_edit_") or pkt:find("buttonClicked|sb_btn_del_blk_edit_", 1, true) then
                 table.remove(CFG.storage_block_list, idx)
                 persistConfig()
-                updateBlockDisplayList()
-                openUnifiedBlockManager()
-                return
+                if updateBlockDisplayList then pcall(updateBlockDisplayList) end
+                if sendNotification then pcall(sendNotification, "Gudang Block #" .. idx .. " dihapus!") end
+                DLG.showSoilBlockListDialog(DLG.block_page or 1)
+                return true
+            end
+        end
+        if btn == "sb_btn_back_blk_list" or pkt:find("buttonClicked|sb_btn_back_blk_list", 1, true) then
+            DLG.showSoilBlockListDialog(DLG.block_page or 1)
+            return true
+        end
+        return true
+
+    -- Pengaturan Bahan Block & Water
+    elseif dName == "sb_block_cfg" or pkt:find("dialog_name|sb_block_cfg", 1, true) then
+        if btn == "sb_btn_save_block_cfg" or pkt:find("buttonClicked|sb_btn_save_block_cfg", 1, true) then
+            local bId = getNum("sb_in_block_id", 0)
+            if bId and bId > 0 then CFG.block_id = bId end
+            local enWater = getVal("sb_chk_enable_water")
+            if enWater ~= "" then CFG.enable_water = (enWater:find("1") ~= nil) end
+            local wId = getNum("sb_in_water_id", 0)
+            if wId and wId > 0 then CFG.water_item_id = wId end
+            local wX = getNum("sb_in_water_x", -1)
+            if wX and wX >= 0 and wX <= 10 then CFG.water_x = wX end
+            persistConfig()
+            if sendNotification then pcall(sendNotification, "Pengaturan Block & Water disimpan!") end
+            DLG.showSoilBlockConfigDialog()
+            return true
+        elseif btn == "sb_btn_back_storage" or pkt:find("buttonClicked|sb_btn_back_storage", 1, true) then
+            DLG.showSoilStorageDialog()
+            return true
+        end
+        return true
+
+    -- --- D. LOCK & DOOR CONFIG HUB ---
+    elseif dName == "sb_lock" or pkt:find("dialog_name|sb_lock", 1, true) then
+        if btn == "sb_btn_open_wl_cfg" or pkt:find("buttonClicked|sb_btn_open_wl_cfg", 1, true) then
+            DLG.showSoilWLConfigDialog()
+            return true
+        elseif btn == "sb_btn_open_sl_cfg" or pkt:find("buttonClicked|sb_btn_open_sl_cfg", 1, true) then
+            DLG.showSoilSLConfigDialog()
+            return true
+        elseif btn == "sb_btn_open_door_cfg" or pkt:find("buttonClicked|sb_btn_open_door_cfg", 1, true) then
+            DLG.showSoilDoorConfigDialog()
+            return true
+        elseif btn == "sb_btn_open_misc_lock" or pkt:find("buttonClicked|sb_btn_open_misc_lock", 1, true) then
+            DLG.showSoilMiscLockDialog()
+            return true
+        elseif btn == "sb_btn_dlg_back_main" or pkt:find("buttonClicked|sb_btn_dlg_back_main", 1, true) then
+            DLG.showSoilMainDialog()
+            return true
+        end
+        return true
+
+    -- WL Config
+    elseif dName == "sb_wl_cfg" or pkt:find("dialog_name|sb_wl_cfg", 1, true) then
+        if btn == "sb_btn_save_wl_cfg" or pkt:find("buttonClicked|sb_btn_save_wl_cfg", 1, true) then
+            local uWl = getVal("sb_chk_use_wl")
+            if uWl ~= "" then CFG.use_wl = (uWl:find("1") ~= nil) end
+            local pubWl = getVal("sb_chk_wl_public")
+            if pubWl ~= "" then CFG.wl_public = (pubWl:find("1") ~= nil) end
+            local ignLock = getVal("sb_chk_ignore_lock")
+            if ignLock ~= "" then CFG.ignore_lock = (ignLock:find("1") ~= nil) end
+            persistConfig()
+            if sendNotification then pcall(sendNotification, "Config WL Disimpan!") end
+            DLG.showSoilWLConfigDialog()
+            return true
+        elseif btn == "sb_btn_back_lock" or pkt:find("buttonClicked|sb_btn_back_lock", 1, true) then
+            DLG.showSoilLockDialog()
+            return true
+        end
+        return true
+
+    -- SL Config
+    elseif dName == "sb_sl_cfg" or pkt:find("dialog_name|sb_sl_cfg", 1, true) then
+        if btn == "sb_btn_save_sl_cfg" or pkt:find("buttonClicked|sb_btn_save_sl_cfg", 1, true) then
+            local uSl = getVal("sb_chk_use_sl")
+            if uSl ~= "" then CFG.use_sl = (uSl:find("1") ~= nil) end
+            local pubSl = getVal("sb_chk_sl_public")
+            if pubSl ~= "" then CFG.sl_public = (pubSl:find("1") ~= nil) end
+            local ignAir = getVal("sb_chk_sl_ignore_air")
+            if ignAir ~= "" then CFG.sl_ignore_air = (ignAir:find("1") ~= nil) end
+            persistConfig()
+            if sendNotification then pcall(sendNotification, "Config SL Disimpan!") end
+            DLG.showSoilSLConfigDialog()
+            return true
+        elseif btn == "sb_btn_back_lock" or pkt:find("buttonClicked|sb_btn_back_lock", 1, true) then
+            DLG.showSoilLockDialog()
+            return true
+        end
+        return true
+
+    -- Door Config
+    elseif dName == "sb_door_cfg" or pkt:find("dialog_name|sb_door_cfg", 1, true) then
+        if btn == "sb_btn_save_door_cfg" or pkt:find("buttonClicked|sb_btn_save_door_cfg", 1, true) then
+            local uDoor = getVal("sb_chk_use_id_door")
+            if uDoor ~= "" then CFG.use_id_door = (uDoor:find("1") ~= nil) end
+            local dItem = getNum("sb_in_id_door_itemid", 0)
+            if dItem and dItem > 0 then CFG.id_door_itemid = dItem end
+            local dId = getVal("sb_in_door_id")
+            if dId ~= "" then CFG.door_id = dId end
+            local dLbl = getVal("sb_in_door_label")
+            if dLbl ~= "" then CFG.door_label = dLbl end
+            persistConfig()
+            if sendNotification then pcall(sendNotification, "Config Door Disimpan!") end
+            DLG.showSoilDoorConfigDialog()
+            return true
+        elseif btn == "sb_btn_back_lock" or pkt:find("buttonClicked|sb_btn_back_lock", 1, true) then
+            DLG.showSoilLockDialog()
+            return true
+        end
+        return true
+
+    -- Jammer & Blocker
+    elseif dName == "sb_misc_lock" or pkt:find("dialog_name|sb_misc_lock", 1, true) then
+        if btn == "sb_btn_save_misc_cfg" or pkt:find("buttonClicked|sb_btn_save_misc_cfg", 1, true) then
+            local uJam = getVal("sb_chk_use_jammer")
+            if uJam ~= "" then CFG.use_jammer = (uJam:find("1") ~= nil) end
+            local uBlk = getVal("sb_chk_use_blocker")
+            if uBlk ~= "" then CFG.use_blocker_door = (uBlk:find("1") ~= nil) end
+            local bItem = getNum("sb_in_blocker_itemid", 0)
+            if bItem and bItem > 0 then CFG.blocker_door_itemid = bItem end
+            local tDel = getNum("sb_in_tele_delay", 0)
+            if tDel and tDel > 0 then CFG.delay_tele_door = tDel end
+            persistConfig()
+            if sendNotification then pcall(sendNotification, "Config Jammer & Blocker Disimpan!") end
+            DLG.showSoilMiscLockDialog()
+            return true
+        elseif btn == "sb_btn_back_lock" or pkt:find("buttonClicked|sb_btn_back_lock", 1, true) then
+            DLG.showSoilLockDialog()
+            return true
+        end
+        return true
+
+    -- --- E. SETTINGS BOT & SOIL FARM ---
+    elseif dName == "sb_settings" or pkt:find("dialog_name|sb_settings", 1, true) then
+        if btn == "sb_btn_save_settings_cfg" or pkt:find("buttonClicked|sb_btn_save_settings_cfg", 1, true) then
+            local m3z = getVal("sb_chk_mode_3zigzag")
+            if m3z ~= "" then CFG.put_mode = (m3z:find("1") ~= nil) and "3zigzag" or "1by1" end
+            local rStep = getNum("sb_in_row_step", 0)
+            if rStep and rStep >= 1 and rStep <= 4 then CFG.row_step = rStep end
+            local sy = getNum("sb_in_start_y", 0)
+            if sy and sy >= 1 and sy <= 10 then CFG.row_start_y = sy end
+            local ey = getNum("sb_in_end_y", 0)
+            if ey and ey >= 40 and ey <= 55 then CFG.row_end_y = ey end
+            local sx = getNum("sb_in_start_x", -1)
+            if sx and sx >= 0 and sx <= 10 then CFG.row_start_x = sx end
+            local ex = getNum("sb_in_end_x", 0)
+            if ex and ex >= 80 and ex <= 98 then CFG.row_end_x = ex end
+            local mFly = getVal("sb_chk_modfly")
+            if mFly ~= "" then CFG.use_modfly = (mFly:find("1") ~= nil) end
+            local aLava = getVal("sb_chk_anti_lava")
+            if aLava ~= "" then CFG.use_antilava = (aLava:find("1") ~= nil) end
+            local aCol = getVal("sb_chk_auto_collect")
+            if aCol ~= "" then CFG.auto_collect = (aCol:find("1") ~= nil) end
+            local dPlc = getNum("sb_in_delay_place", 0)
+            if dPlc and dPlc >= 50 then CFG.delay_place = dPlc end
+            local dWlk = getNum("sb_in_delay_walk", 0)
+            if dWlk and dWlk >= 50 then CFG.delay_walk = dWlk end
+            local dPnc = getNum("sb_in_delay_punch", 0)
+            if dPnc and dPnc >= 50 then CFG.delay_punch = dPnc end
+            local dWrp = getNum("sb_in_delay_warp", 0)
+            if dWrp and dWrp >= 1000 then CFG.delay_warp = dWrp end
+            if applyCheatToggles then pcall(applyCheatToggles) end
+            persistConfig()
+            if sendNotification then pcall(sendNotification, "Pengaturan Bot Disimpan!") end
+            DLG.showSoilSettingsDialog()
+            return true
+        elseif btn == "sb_btn_dlg_back_main" or pkt:find("buttonClicked|sb_btn_dlg_back_main", 1, true) then
+            DLG.showSoilMainDialog()
+            return true
+        end
+        return true
+
+    -- --- F. LOGS & BAG ---
+    elseif dName == "sb_logs" or pkt:find("dialog_name|sb_logs", 1, true) then
+        if btn == "sb_btn_dlg_clear_logs" or pkt:find("buttonClicked|sb_btn_dlg_clear_logs", 1, true) then
+            STATE.last_log_lines = {}
+            if sendNotification then pcall(sendNotification, "Log dibersihkan!") end
+            DLG.showSoilLogsDialog()
+            return true
+        elseif btn == "sb_btn_open_bag_view" or pkt:find("buttonClicked|sb_btn_open_bag_view", 1, true) then
+            DLG.showSoilBagDialog()
+            return true
+        elseif btn == "sb_btn_dlg_back_main" or pkt:find("buttonClicked|sb_btn_dlg_back_main", 1, true) then
+            DLG.showSoilMainDialog()
+            return true
+        end
+        return true
+
+    elseif dName == "sb_bag" or pkt:find("dialog_name|sb_bag", 1, true) then
+        if btn == "sb_btn_refresh_bag_dlg" or pkt:find("buttonClicked|sb_btn_refresh_bag_dlg", 1, true) then
+            if updateBagDisplayList then pcall(updateBagDisplayList) end
+            DLG.showSoilBagDialog()
+            return true
+        elseif btn == "sb_btn_back_logs" or pkt:find("buttonClicked|sb_btn_back_logs", 1, true) then
+            DLG.showSoilLogsDialog()
+            return true
+        end
+        return true
+    end
+
+    return false
+end
+
+_G.handleSoilDialogReturn = handleSoilDialogReturn
+
+local function onSendPacketDialogHook(ptype, pkt)
+    local pStr = nil
+    if type(pkt) == "string" then
+        pStr = pkt
+    elseif type(ptype) == "string" then
+        pStr = ptype
+    end
+    if not pStr or type(pStr) ~= "string" then return end
+
+    -- Intersepsi Chat Command (/sb, /soil, /soilbuilder, /buildsoil, /boren, /menu)
+    local lowerP = pStr:lower()
+    if lowerP:find("/sb", 1, true) or lowerP:find("/soil", 1, true) or lowerP:find("/soilbuilder", 1, true) or lowerP:find("/buildsoil", 1, true) or lowerP:find("/boren", 1, true) or lowerP:find("/menu", 1, true) then
+        if lowerP:find("action|input", 1, true) or lowerP:find("text|/", 1, true) or lowerP:find("action|chat", 1, true) or lowerP:sub(1, 1) == "/" then
+            local cmd = lowerP:match("|text|(/[a-z0-9_]+)") or lowerP:match("text|(/[a-z0-9_]+)") or lowerP:match("(/[a-z0-9_]+)")
+            if cmd == "/sb" or cmd == "/soil" or cmd == "/soilbuilder" or cmd == "/buildsoil" or cmd == "/boren" or cmd == "/menu" then
+                local openFn = _G.showSoilMainDialog or (DLG and DLG.showSoilMainDialog)
+                if openFn then
+                    pcall(openFn)
+                    if LogToConsole then pcall(LogToConsole, "`2[BOREN SOIL] `wMenu Dialog dibuka via chat: `e" .. tostring(cmd)) end
+                end
+                return true
             end
         end
     end
-end
 
+    -- Intersepsi Dialog Return Compact Soil Builder
+    if pStr:find("action|dialog_return", 1, true) then
+        local handler = _G.handleSoilDialogReturn or handleSoilDialogReturn
+        if handler and handler(pStr) then
+            return true
+        end
+    end
+end
 -- ============================================================================
 -- 18. NATIVE GROWLAUNCHER UI BUILDER (5 Sub-Menu Profesional)
 -- ============================================================================
@@ -3353,9 +4593,9 @@ local function registerNativeSoilUI()
     -- Tab 1: Start & World (Antrean World Put)
     local uiWorld = createNativeUI("1. Start & World", "PlayArrow")
     uiWorld:addLabelApp("Boren Store - Soil Builder", "Storefront")
-    uiWorld:addButton("▶ START SOIL BOT", "sb_btn_start")
-    uiWorld:addButton("■ STOP SOIL BOT", "sb_btn_stop")
-    uiWorld:addToggleButton("▶ START / ■ STOP TOGGLE", false, "sb_run_power")
+    uiWorld:addButton("    START SOIL BOT", "sb_btn_start")
+    uiWorld:addButton("    STOP SOIL BOT", "sb_btn_stop")
+    uiWorld:addToggleButton("    START /     STOP TOGGLE", false, "sb_run_power")
     uiWorld:addToggle("Pause Bot", false, "sb_pause_toggle", false)
     uiWorld:addDisplayList("Status Bot", "Default", "sb_power_status_list")
     uiWorld:addDivider()
@@ -3364,13 +4604,13 @@ local function registerNativeSoilUI()
     uiWorld:addInputString("Door ID (Opsional)", CFG.manual_door_text, "Door ID", "Kosong = White Door", "DoorFront", "sb_manual_door_input")
     uiWorld:addButton("+ Tambah World ke Antrean", "sb_btn_add_world")
     uiWorld:addButton("+ Pakai World Sekarang", "sb_btn_add_cur_world")
-    uiWorld:addButton("📋 Kelola Antrean World Put", "sb_btn_view_worlds")
-    uiWorld:addButton("🗑️ Kosongkan Antrean World", "sb_btn_clear_worlds")
+    uiWorld:addButton("     Kelola Antrean World Put", "sb_btn_view_worlds")
+    uiWorld:addButton("        Kosongkan Antrean World", "sb_btn_clear_worlds")
     uiWorld:addDivider()
     uiWorld:addLabel("Cadangan File Antrean:")
     uiWorld:addInputString("Nama File Antrean", CFG.world_file_name, "File", "boren_soil_worlds.txt", "Description", "sb_world_file")
-    uiWorld:addButton("📥 Simpan Antrean ke File", "sb_btn_save_worlds")
-    uiWorld:addButton("📤 Muat Antrean dari File", "sb_btn_load_worlds")
+    uiWorld:addButton("     Simpan Antrean ke File", "sb_btn_save_worlds")
+    uiWorld:addButton("     Muat Antrean dari File", "sb_btn_load_worlds")
     uiWorld:addDisplayList("List World Put", "Default", "sb_world_display_list")
     uiWorld:addDivider()
     uiWorld:addLabel("Fitur Auto Blast & Random:")
@@ -3412,19 +4652,19 @@ local function registerNativeSoilUI()
     uiStorage:addLabel("Multi-Storage Gudang Alat (WL, SL, Jammer, Door, Blast):")
     uiStorage:addInputString("World Gudang Alat", STATE.buf_tool_name, "World", "GUDANGALAT", "Public", "sb_input_add_tool")
     uiStorage:addInputString("Door ID Gudang Alat", STATE.buf_tool_door, "Door", "KOSONG / ID", "DoorFront", "sb_input_add_tool_door")
-    uiStorage:addButton("➕ Tambah Gudang Alat", "sb_btn_add_tool_direct")
-    uiStorage:addButton("📍 Tambah World Sekarang (Alat)", "sb_btn_add_cur_tool")
-    uiStorage:addButton("📋 Kelola Gudang Alat", "sb_btn_manage_tools")
-    uiStorage:addButton("🗑️ Kosongkan Gudang Alat", "sb_btn_clear_tool_direct")
+    uiStorage:addButton("    Tambah Gudang Alat", "sb_btn_add_tool_direct")
+    uiStorage:addButton("     Tambah World Sekarang (Alat)", "sb_btn_add_cur_tool")
+    uiStorage:addButton("     Kelola Gudang Alat", "sb_btn_manage_tools")
+    uiStorage:addButton("        Kosongkan Gudang Alat", "sb_btn_clear_tool_direct")
     uiStorage:addDisplayList("Daftar Gudang Alat", "Default", "sb_tool_display_list")
     uiStorage:addDivider()
     uiStorage:addLabel("Multi-Storage Gudang Block & Water:")
     uiStorage:addInputString("World Gudang Block", STATE.buf_block_name, "World", "GUDANGBLOCK", "Public", "sb_input_add_block")
     uiStorage:addInputString("Door ID Gudang Block", STATE.buf_block_door, "Door", "KOSONG / ID", "DoorFront", "sb_input_add_block_door")
-    uiStorage:addButton("➕ Tambah Gudang Block/Water", "sb_btn_add_block_direct")
-    uiStorage:addButton("📍 Tambah World Sekarang (Block)", "sb_btn_add_cur_block")
-    uiStorage:addButton("📋 Kelola Gudang Block & Water", "sb_btn_manage_blocks")
-    uiStorage:addButton("🗑️ Kosongkan Gudang Block", "sb_btn_clear_block_direct")
+    uiStorage:addButton("    Tambah Gudang Block/Water", "sb_btn_add_block_direct")
+    uiStorage:addButton("     Tambah World Sekarang (Block)", "sb_btn_add_cur_block")
+    uiStorage:addButton("     Kelola Gudang Block & Water", "sb_btn_manage_blocks")
+    uiStorage:addButton("        Kosongkan Gudang Block", "sb_btn_clear_block_direct")
     uiStorage:addDisplayList("Daftar Gudang Block", "Default", "sb_block_display_list")
     uiStorage:addDivider()
     uiStorage:addLabel("Pengaturan Bahan Block & Water:")
@@ -4193,3 +5433,44 @@ _G.resolveItemName = resolveItemName
 _G.lookupItemIDByName = lookupItemIDByName
 
 _G.CFG = CFG
+
+
+-- ============================================================================
+-- 24. INISIALISASI AWAL COMPACT DIALOG SOIL BUILDER
+-- ============================================================================
+_G.showSoilMainDialog = DLG.showSoilMainDialog
+_G.DLG = DLG
+
+local function applyCheatToggles()
+    if editToggle then
+        pcall(editToggle, "ModFly", CFG.use_modfly == true)
+    end
+end
+_G.applyCheatToggles = applyCheatToggles
+
+-- Inisialisasi awal saat script di-Run (Standar In-Game Dialog)
+addLog("[Boren Soil Dialog] Script Auto Soil Builder (In-Game Dialog) Berhasil Dimuat!")
+if LogToConsole then
+    pcall(LogToConsole, "`5[BOREN SOIL] `2Script Aktif! `wKetik `c/sb `watau `c/soil `wdi chat game untuk membuka Menu Form Dialog.")
+end
+if sendNotification then
+    pcall(sendNotification, "Boren Auto Soil Builder Siap! Ketik /sb di chat game.")
+end
+
+-- Otomatis terapkan cheat dan buka dialog saat pertama kali di-run via coroutine
+local function openInitialSoilDialog()
+    safeSleep(200)
+    pcall(applyCheatToggles)
+    local openFn = _G.showSoilMainDialog or (DLG and DLG.showSoilMainDialog)
+    if openFn then pcall(openFn) end
+end
+
+if runCoroutine then
+    pcall(runCoroutine, openInitialSoilDialog)
+elseif runThread then
+    pcall(runThread, openInitialSoilDialog)
+else
+    pcall(applyCheatToggles)
+    local openFn = _G.showSoilMainDialog or (DLG and DLG.showSoilMainDialog)
+    if openFn then pcall(openFn) end
+end
